@@ -1,0 +1,8 @@
+numpy>=1.26
+torch>=2.2
+gymnasium>=0.29
+kaggle-environments>=1.17.3
+stable-baselines3>=2.3
+sb3-contrib>=2.3
+tensorboard>=2.16
+pytest>=8.0
