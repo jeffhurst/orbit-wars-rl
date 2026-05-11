@@ -56,19 +56,47 @@ class OrbitWarsGym(gym.Env):
         self._env: Any | None = None
         self._last_obs: Any | None = None
         self._fallback_step = 0
+        self._fallback_reason: str | None = None
+
+    @property
+    def using_fallback_env(self) -> bool:
+        """Whether the wrapper is currently backed by the synthetic smoke-test fallback."""
+        return self._env is None
+
+    @property
+    def fallback_reason(self) -> str | None:
+        """Reason the synthetic fallback is active, if known."""
+        return self._fallback_reason
+
+    def require_real_kaggle_env(self) -> None:
+        """Raise if reset() selected the synthetic fallback instead of Kaggle orbit_wars."""
+        if not self.using_fallback_env:
+            return
+
+        reason = f" Reason: {self._fallback_reason}." if self._fallback_reason else ""
+        raise RuntimeError(
+            "OrbitWarsGym is using the synthetic smoke-test fallback instead of Kaggle's "
+            "real orbit_wars environment. Refusing to train because this would produce "
+            "a checkpoint from fallback observations and rewards."
+            f"{reason} Install/configure kaggle-environments with orbit_wars support, "
+            "then rerun training."
+        )
 
     def _make_env(self) -> Any | None:
+        self._fallback_reason = None
         if importlib.util.find_spec("kaggle_environments") is None:
+            self._fallback_reason = "kaggle_environments is not installed"
             if self.debug:
-                print("Falling back to synthetic Orbit Wars smoke env: kaggle_environments is not installed")
+                print(f"Falling back to synthetic Orbit Wars smoke env: {self._fallback_reason}")
             return None
         from kaggle_environments import make
 
         try:
             return make("orbit_wars", debug=self.debug)
         except Exception as exc:
+            self._fallback_reason = f"make('orbit_wars') failed: {exc}"
             if self.debug:
-                print(f"Falling back to synthetic Orbit Wars smoke env: {exc}")
+                print(f"Falling back to synthetic Orbit Wars smoke env: {self._fallback_reason}")
             return None
 
     def _player_obs(self) -> Any:
@@ -124,7 +152,10 @@ class OrbitWarsGym(gym.Env):
                 self._env.reset()
         self._last_obs = self._player_obs()
         self._refresh_candidates()
-        return encode_observation(self._last_obs, self.max_planets, self.max_fleets), {}
+        info = {"fallback_env": self.using_fallback_env}
+        if self._fallback_reason:
+            info["fallback_reason"] = self._fallback_reason
+        return encode_observation(self._last_obs, self.max_planets, self.max_fleets), info
 
     def step(self, action: int):
         previous_obs = self._last_obs

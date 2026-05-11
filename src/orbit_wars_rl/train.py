@@ -35,6 +35,7 @@ def main() -> None:
 
     env = OrbitWarsGym(opponent_agent=OPPONENTS[args.opponent], player_id=0)
     env.reset(seed=args.seed)
+    env.require_real_kaggle_env()
 
     print(f"Training MaskablePPO for {args.timesteps:,} timesteps against {args.opponent} opponent")
     model = MaskablePPO(
