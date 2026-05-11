@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from orbit_wars_rl.envs.orbit_wars_gym import OrbitWarsGym
 
@@ -29,3 +30,31 @@ def test_action_masks_shape_and_true():
     assert mask.dtype == np.bool_
     assert mask.any()
     assert mask[0]
+
+
+def test_reset_info_reports_synthetic_fallback_when_active(monkeypatch):
+    env = OrbitWarsGym(max_candidates=8, max_planets=8, max_fleets=8)
+
+    def fake_make_env():
+        env._fallback_reason = "test fallback"
+        return None
+
+    monkeypatch.setattr(env, "_make_env", fake_make_env)
+    _, info = env.reset(seed=123)
+
+    assert info["fallback_env"] is True
+    assert info["fallback_reason"] == "test fallback"
+
+
+def test_require_real_kaggle_env_rejects_synthetic_fallback(monkeypatch):
+    env = OrbitWarsGym(max_candidates=8, max_planets=8, max_fleets=8)
+
+    def fake_make_env():
+        env._fallback_reason = "test fallback"
+        return None
+
+    monkeypatch.setattr(env, "_make_env", fake_make_env)
+    env.reset(seed=123)
+
+    with pytest.raises(RuntimeError, match="synthetic smoke-test fallback"):
+        env.require_real_kaggle_env()
