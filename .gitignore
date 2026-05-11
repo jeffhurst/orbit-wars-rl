@@ -1,0 +1,15 @@
+# Python virtual environment
+.venv/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Pytest cache
+.pytest_cache/
+
+# Build/output folders
+build/
+dist/
+*.egg-info/
