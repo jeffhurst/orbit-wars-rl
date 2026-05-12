@@ -16,7 +16,10 @@ from orbit_wars_rl.features.metrics import (
     summarize_planets,
     count_captures_and_losses,
 )
-from orbit_wars_rl.features.observation_encoder import encode_observation, observation_size
+from orbit_wars_rl.features.observation_encoder import (
+    encode_observation,
+    observation_size,
+)
 from orbit_wars_rl.features.reward_shaping import compute_reward
 from orbit_wars_rl.opponents.starter_bot import agent as starter_agent
 
@@ -53,7 +56,11 @@ class OrbitWarsGym(gym.Env):
         self.observation_space = spaces.Box(
             low=-10.0,
             high=10.0,
-            shape=(observation_size(self.max_planets, self.max_fleets),),
+            shape=(
+                observation_size(
+                    self.max_planets, self.max_fleets, self.max_candidates
+                ),
+            ),
             dtype=np.float32,
         )
         self.action_space = spaces.Discrete(self.max_candidates)
@@ -97,7 +104,9 @@ class OrbitWarsGym(gym.Env):
         if importlib.util.find_spec("kaggle_environments") is None:
             self._fallback_reason = "kaggle_environments is not installed"
             if self.debug:
-                print(f"Falling back to synthetic Orbit Wars smoke env: {self._fallback_reason}")
+                print(
+                    f"Falling back to synthetic Orbit Wars smoke env: {self._fallback_reason}"
+                )
             return None
         from kaggle_environments import make
 
@@ -106,7 +115,9 @@ class OrbitWarsGym(gym.Env):
         except Exception as exc:
             self._fallback_reason = f"make('orbit_wars') failed: {exc}"
             if self.debug:
-                print(f"Falling back to synthetic Orbit Wars smoke env: {self._fallback_reason}")
+                print(
+                    f"Falling back to synthetic Orbit Wars smoke env: {self._fallback_reason}"
+                )
             return None
 
     def _player_obs(self) -> Any:
@@ -139,7 +150,9 @@ class OrbitWarsGym(gym.Env):
         }
 
     def _refresh_candidates(self) -> None:
-        self.current_candidates = generate_candidates(self._last_obs or {}, self.max_candidates)
+        self.current_candidates = generate_candidates(
+            self._last_obs or {}, self.max_candidates
+        )
         if not self.current_candidates:
             self.current_candidates = [{"type": "noop"}]
 
@@ -153,7 +166,9 @@ class OrbitWarsGym(gym.Env):
     ) -> dict[str, dict[str, float]]:
         ownership_changes = count_captures_and_losses(previous_obs, current_obs)
         self.episode_metrics["captures_per_episode"] += ownership_changes["captures"]
-        self.episode_metrics["planets_lost_per_episode"] += ownership_changes["planets_lost"]
+        self.episode_metrics["planets_lost_per_episode"] += ownership_changes[
+            "planets_lost"
+        ]
 
         custom_metrics = {
             **make_action_metrics(int(action), candidates, self.max_candidates),
@@ -189,10 +204,19 @@ class OrbitWarsGym(gym.Env):
                 self._env.reset()
         self._last_obs = self._player_obs()
         self._refresh_candidates()
-        info = {"fallback_env": self.using_fallback_env}
+        info: dict[str, Any] = {"fallback_env": self.using_fallback_env}
         if self._fallback_reason:
             info["fallback_reason"] = self._fallback_reason
-        return encode_observation(self._last_obs, self.max_planets, self.max_fleets), info
+        return (
+            encode_observation(
+                self._last_obs,
+                self.max_planets,
+                self.max_fleets,
+                self.current_candidates,
+                self.max_candidates,
+            ),
+            info,
+        )
 
     def step(self, action: int):
         previous_obs = self._last_obs
@@ -214,7 +238,14 @@ class OrbitWarsGym(gym.Env):
             self.previous_obs = current_obs
             self._last_obs = current_obs
             self._refresh_candidates()
-            return encode_observation(current_obs, self.max_planets, self.max_fleets), reward, terminated, False, info
+            encoded = encode_observation(
+                current_obs,
+                self.max_planets,
+                self.max_fleets,
+                self.current_candidates,
+                self.max_candidates,
+            )
+            return encoded, reward, terminated, False, info
 
         actions: list[Any] = [[] for _ in range(self.num_players)]
         actions[self.player_id] = rl_action
@@ -222,7 +253,9 @@ class OrbitWarsGym(gym.Env):
             if pid == self.player_id:
                 continue
             try:
-                actions[pid] = self.opponent_agent(self._opponent_obs(pid), getattr(self._env, "configuration", None))
+                actions[pid] = self.opponent_agent(
+                    self._opponent_obs(pid), getattr(self._env, "configuration", None)
+                )
             except Exception:
                 actions[pid] = []
 
@@ -234,12 +267,19 @@ class OrbitWarsGym(gym.Env):
             state = self._env.step([[] for _ in range(self.num_players)])
 
         current_obs = self._player_obs()
-        terminated = all(getattr(agent_state, "status", "DONE") != "ACTIVE" for agent_state in self._env.state)
+        terminated = all(
+            getattr(agent_state, "status", "DONE") != "ACTIVE"
+            for agent_state in self._env.state
+        )
         reward = compute_reward(previous_obs, current_obs, state, terminated)
         info = {
             "kaggle_action": rl_action,
             "raw_reward": getattr(self._env.state[self.player_id], "reward", None),
-            "final_score": getattr(self._env.state[self.player_id], "reward", None) if terminated else None,
+            "final_score": (
+                getattr(self._env.state[self.player_id], "reward", None)
+                if terminated
+                else None
+            ),
             **self._collect_metrics(
                 action, action_candidates, previous_obs, current_obs, terminated
             ),
@@ -247,7 +287,14 @@ class OrbitWarsGym(gym.Env):
         self.previous_obs = current_obs
         self._last_obs = current_obs
         self._refresh_candidates()
-        return encode_observation(current_obs, self.max_planets, self.max_fleets), reward, terminated, False, info
+        encoded = encode_observation(
+            current_obs,
+            self.max_planets,
+            self.max_fleets,
+            self.current_candidates,
+            self.max_candidates,
+        )
+        return encoded, reward, terminated, False, info
 
     def render(self):
         if self._env is None:

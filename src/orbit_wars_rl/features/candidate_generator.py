@@ -19,7 +19,12 @@ def _angle_between(source: dict[str, Any], target: dict[str, Any]) -> float:
     can be added without changing the candidate schema.
     """
 
-    return float(math.atan2(float(target["y"]) - float(source["y"]), float(target["x"]) - float(source["x"])))
+    return float(
+        math.atan2(
+            float(target["y"]) - float(source["y"]),
+            float(target["x"]) - float(source["x"]),
+        )
+    )
 
 
 def _target_priority(planet: dict[str, Any], player: int) -> tuple[int, float, int]:
@@ -46,7 +51,11 @@ def generate_candidates(obs: dict, max_candidates: int) -> list[dict]:
     candidates: list[dict] = [{"type": "noop"}]
     planets = get_planets(obs)
     player = get_player(obs)
-    owned = [p for p in planets if int(p["owner"]) == player and float(p["ships"]) >= MIN_SOURCE_SHIPS]
+    owned = [
+        p
+        for p in planets
+        if int(p["owner"]) == player and float(p["ships"]) >= MIN_SOURCE_SHIPS
+    ]
     owned.sort(key=lambda p: (-float(p["ships"]), int(p["id"])))
     targets = sorted(planets, key=lambda p: _target_priority(p, player))
 
@@ -61,23 +70,37 @@ def generate_candidates(obs: dict, max_candidates: int) -> list[dict]:
                 ships = int(math.floor(available * fraction))
                 if ships <= 0:
                     continue
-                distance = math.hypot(float(target["x"]) - float(source["x"]), float(target["y"]) - float(source["y"]))
-                candidates.append({
-                    "type": "send",
-                    "from_planet_id": int(source["id"]),
-                    "target_planet_id": int(target["id"]),
-                    "ship_fraction": float(fraction),
-                    "ships": int(ships),
-                    "angle": _angle_between(source, target),
-                    "candidate_features": [
-                        float(fraction),
-                        min(float(source["ships"]) / 500.0, 5.0),
-                        min(float(target["ships"]) / 500.0, 5.0),
-                        min(distance / 150.0, 2.0),
-                        1.0 if int(target["owner"]) == player else 0.0,
-                        1.0 if int(target["owner"]) == -1 else 0.0,
-                    ],
-                })
+                distance = math.hypot(
+                    float(target["x"]) - float(source["x"]),
+                    float(target["y"]) - float(source["y"]),
+                )
+                target_owner = int(target["owner"])
+                if target_owner == -1:
+                    purpose = "capture_neutral"
+                elif target_owner != player:
+                    purpose = "attack_enemy"
+                else:
+                    purpose = "reinforce"
+                candidates.append(
+                    {
+                        "type": "send",
+                        "from_planet_id": int(source["id"]),
+                        "target_planet_id": int(target["id"]),
+                        "ship_fraction": float(fraction),
+                        "ships": int(ships),
+                        "angle": _angle_between(source, target),
+                        "purpose": purpose,
+                        "target_owner": target_owner,
+                        "candidate_features": [
+                            float(fraction),
+                            min(float(source["ships"]) / 500.0, 5.0),
+                            min(float(target["ships"]) / 500.0, 5.0),
+                            min(distance / 150.0, 2.0),
+                            1.0 if target_owner == player else 0.0,
+                            1.0 if target_owner == -1 else 0.0,
+                        ],
+                    }
+                )
                 if len(candidates) >= max_candidates:
                     return candidates
     return candidates
