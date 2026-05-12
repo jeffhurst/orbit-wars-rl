@@ -13,6 +13,7 @@ from orbit_wars_rl.opponents.random_bot import agent as random_agent
 from orbit_wars_rl.opponents.starter_bot import agent as starter_agent
 from orbit_wars_rl.utils.paths import MODELS_DIR, RUNS_DIR, ensure_dir
 from orbit_wars_rl.utils.seeds import set_global_seeds
+from orbit_wars_rl.utils.tensorboard_callback import CustomTensorboardCallback
 
 OPPONENTS = {"random": random_agent, "starter": starter_agent, "greedy": greedy_agent}
 
@@ -38,6 +39,7 @@ def main() -> None:
     env.require_real_kaggle_env()
 
     print(f"Training MaskablePPO for {args.timesteps:,} timesteps against {args.opponent} opponent")
+    tensorboard_callback = CustomTensorboardCallback()
     model = MaskablePPO(
         "MlpPolicy",
         env,
@@ -51,7 +53,11 @@ def main() -> None:
         seed=args.seed,
         verbose=1,
     )
-    model.learn(total_timesteps=args.timesteps, progress_bar=False)
+    model.learn(
+        total_timesteps=args.timesteps,
+        progress_bar=False,
+        callback=tensorboard_callback,
+    )
     model.save(str(args.save_path))
     print(f"Saved model to {args.save_path}")
 
