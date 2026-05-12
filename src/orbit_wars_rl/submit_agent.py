@@ -21,7 +21,9 @@ _MODEL_LOAD_ATTEMPTED = False
 
 
 def _model_path() -> Path:
-    return Path(os.environ.get("ORBIT_WARS_MODEL", "models/orbit_wars_maskableppo_v1.zip"))
+    return Path(
+        os.environ.get("ORBIT_WARS_MODEL", "models/orbit_wars_maskableppo_v1.zip")
+    )
 
 
 def _load_model():
@@ -53,7 +55,9 @@ def agent(obs, config=None):
         mask = np.zeros(MAX_CANDIDATES, dtype=bool)
         mask[: min(len(candidates), MAX_CANDIDATES)] = True
         mask[0] = True
-        encoded = encode_observation(obs, MAX_PLANETS, MAX_FLEETS)
+        encoded = encode_observation(
+            obs, MAX_PLANETS, MAX_FLEETS, candidates, MAX_CANDIDATES
+        )
         action, _ = model.predict(encoded, deterministic=True, action_masks=mask)
         return decode_candidate(int(action), candidates)
     except Exception:

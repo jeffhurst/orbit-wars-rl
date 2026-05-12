@@ -1,46 +1,35 @@
 from __future__ import annotations
 
-from collections import defaultdict
 from typing import Any
 
+from orbit_wars_rl.features.observation_encoder import get_planets, get_player
 
-def get_player_id(obs: dict[str, Any]) -> int:
+
+def get_player_id(obs: Any) -> int:
     """
     Orbit Wars observations may use slightly different names depending on wrapper/version.
     Default to player 0 if unavailable.
     """
-    return int(obs.get("player", obs.get("player_id", 0)))
+    return get_player(obs)
 
 
-def get_planets(obs: dict[str, Any]) -> list[list]:
-    return list(obs.get("planets", []))
+def planet_id(planet: dict[str, float | int]) -> int:
+    return int(planet["id"])
 
 
-def planet_id(planet: list) -> int:
-    return int(planet[0])
+def planet_owner(planet: dict[str, float | int]) -> int:
+    return int(planet["owner"])
 
 
-def planet_owner(planet: list) -> int:
-    return int(planet[1])
+def planet_ships(planet: dict[str, float | int]) -> float:
+    return float(planet["ships"])
 
 
-def planet_ships(planet: list) -> float:
-    # Expected format:
-    # [id, owner, x, y, radius, ships, production]
-    try:
-        return float(planet[5])
-    except Exception:
-        return 0.0
+def planet_production(planet: dict[str, float | int]) -> float:
+    return float(planet["production"])
 
 
-def planet_production(planet: list) -> float:
-    try:
-        return float(planet[6])
-    except Exception:
-        return 0.0
-
-
-def summarize_planets(obs: dict[str, Any]) -> dict[str, float]:
+def summarize_planets(obs: Any) -> dict[str, float]:
     player_id = get_player_id(obs)
 
     my_planets = 0
@@ -73,8 +62,8 @@ def summarize_planets(obs: dict[str, Any]) -> dict[str, float]:
 
 
 def count_captures_and_losses(
-    previous_obs: dict[str, Any] | None,
-    current_obs: dict[str, Any],
+    previous_obs: Any | None,
+    current_obs: Any,
 ) -> dict[str, float]:
     if previous_obs is None:
         return {
@@ -84,10 +73,7 @@ def count_captures_and_losses(
 
     player_id = get_player_id(current_obs)
 
-    prev_owners = {
-        planet_id(p): planet_owner(p)
-        for p in get_planets(previous_obs)
-    }
+    prev_owners = {planet_id(p): planet_owner(p) for p in get_planets(previous_obs)}
 
     captures = 0
     planets_lost = 0

@@ -18,6 +18,7 @@ BOARD_SIZE = 100.0
 DEFAULT_EPISODE_STEPS = 500.0
 PLANET_FEATURES = 9
 FLEET_FEATURES = 8
+CANDIDATE_FEATURES = 6
 GLOBAL_FEATURES = 6
 
 
@@ -71,7 +72,7 @@ def _row_value(row: Any, index: int, name: str, default: Any = 0) -> Any:
 def get_player(obs: Any) -> int:
     """Return the active player id, defaulting to player 0."""
 
-    return _as_int(_get(obs, "player", _get(obs, "mark", 0)), 0)
+    return _as_int(_get(obs, "player", _get(obs, "player_id", _get(obs, "mark", 0))), 0)
 
 
 def get_planets(obs: Any) -> list[dict[str, float | int]]:
@@ -110,8 +111,13 @@ def get_fleets(obs: Any) -> list[dict[str, float | int]]:
     return sorted(fleets, key=lambda f: int(f["id"]))
 
 
-def observation_size(max_planets: int, max_fleets: int) -> int:
-    return GLOBAL_FEATURES + max_planets * PLANET_FEATURES + max_fleets * FLEET_FEATURES
+def observation_size(max_planets: int, max_fleets: int, max_candidates: int = 0) -> int:
+    return (
+        GLOBAL_FEATURES
+        + max_planets * PLANET_FEATURES
+        + max_fleets * FLEET_FEATURES
+        + max_candidates * CANDIDATE_FEATURES
+    )
 
 
 def _owner_features(owner: int, player: int) -> tuple[float, float]:
@@ -122,17 +128,43 @@ def _owner_features(owner: int, player: int) -> tuple[float, float]:
     return 0.0, 1.0
 
 
-def encode_observation(obs: dict, max_planets: int, max_fleets: int) -> np.ndarray:
+def _candidate_features(candidate: Mapping[str, Any] | Any) -> list[float]:
+    raw_features = _get(candidate, "candidate_features", [])
+    if isinstance(raw_features, np.ndarray):
+        raw_features = raw_features.tolist()
+    if not isinstance(raw_features, list | tuple):
+        raw_features = []
+
+    features = [_as_float(value) for value in raw_features[:CANDIDATE_FEATURES]]
+    if len(features) < CANDIDATE_FEATURES:
+        features.extend([0.0] * (CANDIDATE_FEATURES - len(features)))
+    return [float(np.clip(value, -10.0, 10.0)) for value in features]
+
+
+def encode_observation(
+    obs: Any,
+    max_planets: int,
+    max_fleets: int,
+    candidates: list[dict[str, Any]] | None = None,
+    max_candidates: int = 0,
+) -> np.ndarray:
     """Encode an Orbit Wars observation as a fixed-size float32 vector."""
 
     player = get_player(obs)
     step = _as_float(_get(obs, "step", _get(obs, "turn", 0.0)))
-    episode_steps = max(_as_float(_get(obs, "episodeSteps", DEFAULT_EPISODE_STEPS), DEFAULT_EPISODE_STEPS), 1.0)
+    episode_steps = max(
+        _as_float(
+            _get(obs, "episodeSteps", DEFAULT_EPISODE_STEPS), DEFAULT_EPISODE_STEPS
+        ),
+        1.0,
+    )
     planets = get_planets(obs)
     fleets = get_fleets(obs)
 
     owned_planets = sum(1 for p in planets if int(p["owner"]) == player)
-    enemy_planets = sum(1 for p in planets if int(p["owner"]) >= 0 and int(p["owner"]) != player)
+    enemy_planets = sum(
+        1 for p in planets if int(p["owner"]) >= 0 and int(p["owner"]) != player
+    )
 
     features: list[float] = [
         np.clip(step / episode_steps, 0.0, 1.0),
@@ -148,17 +180,19 @@ def encode_observation(obs: dict, max_planets: int, max_fleets: int) -> np.ndarr
             p = planets[i]
             owner = int(p["owner"])
             is_mine, is_enemy = _owner_features(owner, player)
-            features.extend([
-                np.clip(float(p["id"]) / 128.0, 0.0, 4.0),
-                is_mine,
-                is_enemy,
-                np.clip(float(p["x"]) / BOARD_SIZE, -1.0, 2.0),
-                np.clip(float(p["y"]) / BOARD_SIZE, -1.0, 2.0),
-                np.clip(float(p["radius"]) / 10.0, 0.0, 2.0),
-                np.clip(float(p["ships"]) / 500.0, 0.0, 5.0),
-                np.clip(float(p["production"]) / 5.0, 0.0, 2.0),
-                1.0,
-            ])
+            features.extend(
+                [
+                    np.clip(float(p["id"]) / 128.0, 0.0, 4.0),
+                    is_mine,
+                    is_enemy,
+                    np.clip(float(p["x"]) / BOARD_SIZE, -1.0, 2.0),
+                    np.clip(float(p["y"]) / BOARD_SIZE, -1.0, 2.0),
+                    np.clip(float(p["radius"]) / 10.0, 0.0, 2.0),
+                    np.clip(float(p["ships"]) / 500.0, 0.0, 5.0),
+                    np.clip(float(p["production"]) / 5.0, 0.0, 2.0),
+                    1.0,
+                ]
+            )
         else:
             features.extend([0.0] * PLANET_FEATURES)
 
@@ -168,17 +202,26 @@ def encode_observation(obs: dict, max_planets: int, max_fleets: int) -> np.ndarr
             owner = int(f["owner"])
             is_mine, is_enemy = _owner_features(owner, player)
             angle = _as_float(f["angle"])
-            features.extend([
-                np.clip(float(f["id"]) / 512.0, 0.0, 8.0),
-                is_mine,
-                is_enemy,
-                np.clip(float(f["x"]) / BOARD_SIZE, -1.0, 2.0),
-                np.clip(float(f["y"]) / BOARD_SIZE, -1.0, 2.0),
-                float(np.sin(angle)),
-                float(np.cos(angle)),
-                np.clip(float(f["ships"]) / 500.0, 0.0, 5.0),
-            ])
+            features.extend(
+                [
+                    np.clip(float(f["id"]) / 512.0, 0.0, 8.0),
+                    is_mine,
+                    is_enemy,
+                    np.clip(float(f["x"]) / BOARD_SIZE, -1.0, 2.0),
+                    np.clip(float(f["y"]) / BOARD_SIZE, -1.0, 2.0),
+                    float(np.sin(angle)),
+                    float(np.cos(angle)),
+                    np.clip(float(f["ships"]) / 500.0, 0.0, 5.0),
+                ]
+            )
         else:
             features.extend([0.0] * FLEET_FEATURES)
+
+    candidate_rows = candidates or []
+    for i in range(max_candidates):
+        if i < len(candidate_rows):
+            features.extend(_candidate_features(candidate_rows[i]))
+        else:
+            features.extend([0.0] * CANDIDATE_FEATURES)
 
     return np.asarray(features, dtype=np.float32)
