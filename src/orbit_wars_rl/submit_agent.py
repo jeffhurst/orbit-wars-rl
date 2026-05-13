@@ -51,7 +51,7 @@ def agent(obs, config=None):
         model = _load_model()
         if model is None:
             return starter_agent(obs, config)
-        candidates = generate_candidates(obs, MAX_CANDIDATES)
+        candidates = generate_candidates(obs, MAX_CANDIDATES, config)
         mask = np.zeros(MAX_CANDIDATES, dtype=bool)
         mask[: min(len(candidates), MAX_CANDIDATES)] = True
         mask[0] = True

@@ -7,7 +7,7 @@ from orbit_wars_rl.features.candidate_generator import generate_candidates
 
 
 def agent(obs, config=None):
-    candidates = generate_candidates(obs, max_candidates=48)
+    candidates = generate_candidates(obs, max_candidates=48, config=config)
     for idx, candidate in enumerate(candidates):
         if candidate.get("type") == "send" and candidate.get("ship_fraction") == 0.5:
             return decode_candidate(idx, candidates)

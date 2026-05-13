@@ -11,7 +11,7 @@ from orbit_wars_rl.features.candidate_generator import generate_candidates
 def agent(obs, config=None):
     if random.random() < 0.35:
         return []
-    candidates = generate_candidates(obs, max_candidates=24)
+    candidates = generate_candidates(obs, max_candidates=24, config=config)
     if len(candidates) <= 1:
         return []
     return decode_candidate(random.randrange(1, len(candidates)), candidates)

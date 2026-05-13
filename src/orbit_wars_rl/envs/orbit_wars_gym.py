@@ -152,7 +152,9 @@ class OrbitWarsGym(gym.Env):
 
     def _refresh_candidates(self) -> None:
         self.current_candidates = generate_candidates(
-            self._last_obs or {}, self.max_candidates
+            self._last_obs or {},
+            self.max_candidates,
+            getattr(self._env, "configuration", None),
         )
         if not self.current_candidates:
             self.current_candidates = [{"type": "noop"}]
