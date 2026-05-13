@@ -10,7 +10,7 @@ from orbit_wars_rl.features.observation_encoder import get_planets, get_player
 def agent(obs, config=None):
     player = get_player(obs)
     planets = {int(p["id"]): p for p in get_planets(obs)}
-    candidates = generate_candidates(obs, max_candidates=64)
+    candidates = generate_candidates(obs, max_candidates=64, config=config)
     best_idx = 0
     best_key = None
     for idx, candidate in enumerate(candidates):

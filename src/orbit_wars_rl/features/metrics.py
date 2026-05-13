@@ -117,6 +117,11 @@ def make_action_metrics(
         "target_owner_neutral_rate": 0.0,
         "target_owner_enemy_rate": 0.0,
         "target_owner_self_rate": 0.0,
+        "intercept_angle_rate": 0.0,
+        "candidate_pool_intercept_angle_rate": (
+            sum(1 for candidate in candidates if candidate.get("intercept_angle_used"))
+            / max(float(len(candidates)), 1.0)
+        ),
         "source_planet_id": -1.0,
         "chosen_candidate_index": float(action_index),
     }
@@ -140,6 +145,9 @@ def make_action_metrics(
     metrics["avg_ships_sent"] = float(candidate.get("ships", 0))
     metrics["avg_ship_fraction"] = float(candidate.get("ship_fraction", 0.0))
     metrics["source_planet_id"] = float(candidate.get("from_planet_id", -1))
+    metrics["intercept_angle_rate"] = (
+        1.0 if candidate.get("intercept_angle_used") else 0.0
+    )
 
     purpose = candidate.get("purpose", "")
 

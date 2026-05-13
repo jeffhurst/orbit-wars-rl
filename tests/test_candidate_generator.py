@@ -1,4 +1,7 @@
+import math
+
 from orbit_wars_rl.features.candidate_generator import generate_candidates
+from orbit_wars_rl.features.metrics import make_action_metrics
 from orbit_wars_rl.features.observation_encoder import CANDIDATE_FEATURES
 
 
@@ -60,3 +63,52 @@ def test_candidate_generator_emits_rich_candidate_features():
     )
     # Target type is explicit instead of requiring PPO to infer it from ordering.
     assert send_candidates[0]["candidate_features"][5:8] == [1.0, 0.0, 0.0]
+
+
+def moving_target_obs():
+    return {
+        "player": 0,
+        "angular_velocity": 0.2,
+        "planets": [
+            [0, 0, 50.0, 50.0, 2.0, 30, 2],
+            [1, -1, 60.0, 50.0, 2.0, 12, 3],
+        ],
+        "fleets": [],
+    }
+
+
+def test_candidate_generator_uses_intercept_angle_for_orbiting_target():
+    config = {"shipSpeed": 5.0}
+
+    candidates = generate_candidates(
+        moving_target_obs(), max_candidates=4, config=config
+    )
+    send_candidate = next(
+        candidate for candidate in candidates if candidate.get("type") == "send"
+    )
+
+    naive_angle = math.atan2(50.0 - 50.0, 60.0 - 50.0)
+    assert send_candidate["intercept_angle_used"] is True
+    assert not math.isclose(send_candidate["angle"], naive_angle)
+    assert send_candidate["angle"] > naive_angle
+
+
+def test_candidate_generator_falls_back_to_direct_angle_without_motion_metadata():
+    candidates = generate_candidates(sample_obs(), max_candidates=4)
+    send_candidate = next(
+        candidate for candidate in candidates if candidate.get("type") == "send"
+    )
+
+    assert send_candidate["intercept_angle_used"] is False
+    assert math.isclose(send_candidate["angle"], 0.0)
+
+
+def test_action_metrics_report_intercept_angle_usage():
+    candidates = generate_candidates(
+        moving_target_obs(), max_candidates=4, config={"shipSpeed": 5.0}
+    )
+
+    metrics = make_action_metrics(1, candidates, max_candidates=4)
+
+    assert metrics["intercept_angle_rate"] == 1.0
+    assert metrics["candidate_pool_intercept_angle_rate"] > 0.0
