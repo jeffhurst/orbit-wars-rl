@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+import copy
 import importlib.util
+from typing import Any, Callable
 
 import gymnasium as gym
 import numpy as np
@@ -123,7 +124,7 @@ class OrbitWarsGym(gym.Env):
     def _player_obs(self) -> Any:
         if self._env is None:
             return self._fallback_obs()
-        obs = self._env.state[self.player_id].observation
+        obs = copy.deepcopy(self._env.state[self.player_id].observation)
         try:
             obs["step"] = len(getattr(self._env, "steps", []))
         except Exception:
@@ -133,7 +134,7 @@ class OrbitWarsGym(gym.Env):
     def _opponent_obs(self, opponent_id: int) -> Any:
         if self._env is None:
             return self._fallback_obs(player=opponent_id)
-        return self._env.state[opponent_id].observation
+        return copy.deepcopy(self._env.state[opponent_id].observation)
 
     def _fallback_obs(self, player: int | None = None) -> dict:
         player = self.player_id if player is None else player

@@ -58,3 +58,53 @@ def test_require_real_kaggle_env_rejects_synthetic_fallback(monkeypatch):
 
     with pytest.raises(RuntimeError, match="synthetic smoke-test fallback"):
         env.require_real_kaggle_env()
+
+
+def test_real_env_observations_are_snapshotted_for_reward_deltas(monkeypatch):
+    shared_obs = {
+        "player": 0,
+        "planets": [
+            [0, 0, 20.0, 20.0, 2.0, 20, 2],
+            [1, -1, 50.0, 20.0, 2.0, 5, 1],
+        ],
+        "fleets": [],
+    }
+
+    class AgentState:
+        def __init__(self, observation, reward=0.0):
+            self.observation = observation
+            self.reward = reward
+            self.status = "ACTIVE"
+
+    class MutableObservationEnv:
+        def __init__(self):
+            self.configuration = None
+            self.steps = []
+            self.state = [
+                AgentState(shared_obs),
+                AgentState(
+                    {"player": 1, "planets": shared_obs["planets"], "fleets": []}
+                ),
+            ]
+
+        def reset(self, num_players=None):
+            return self.state
+
+        def step(self, actions):
+            shared_obs["planets"][1][1] = 0
+            self.steps.append(actions)
+            return self.state
+
+    env = OrbitWarsGym(
+        opponent_agent=lambda obs, config: [],
+        max_candidates=8,
+        max_planets=8,
+        max_fleets=8,
+    )
+    monkeypatch.setattr(env, "_make_env", MutableObservationEnv)
+
+    env.reset(seed=123)
+    _, reward, _, _, info = env.step(0)
+
+    assert info["custom_metrics"]["captures"] == 1.0
+    assert reward > 0.25
