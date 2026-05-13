@@ -92,12 +92,22 @@ def generate_candidates(obs: dict, max_candidates: int) -> list[dict]:
                         "purpose": purpose,
                         "target_owner": target_owner,
                         "candidate_features": [
+                            1.0,  # send action; NOOP/padding encode as all zeros
                             float(fraction),
                             min(float(source["ships"]) / 500.0, 5.0),
                             min(float(target["ships"]) / 500.0, 5.0),
                             min(distance / 150.0, 2.0),
-                            1.0 if target_owner == player else 0.0,
                             1.0 if target_owner == -1 else 0.0,
+                            (
+                                1.0
+                                if target_owner >= 0 and target_owner != player
+                                else 0.0
+                            ),
+                            1.0 if target_owner == player else 0.0,
+                            float(source["x"]) / 100.0,
+                            float(source["y"]) / 100.0,
+                            float(target["x"]) / 100.0,
+                            float(target["y"]) / 100.0,
                         ],
                     }
                 )
