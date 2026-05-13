@@ -68,6 +68,20 @@ PowerShell helper:
 
 Evaluation reports wins, losses, draws when raw Kaggle rewards are available, plus average shaped reward and average final score when detectable.
 
+
+## Diagnosing flat training runs
+
+If TensorBoard shows `rollout/ep_rew_mean` stuck far below zero after a few hundred thousand steps, do not treat that scalar as a win-rate measurement. It is the sum of shaped per-turn rewards over long 500-turn games, so it can be strongly negative even when individual tactical choices improve. Always run `evaluate.py` and compare wins/losses/draws against the target opponent.
+
+For runs that fail to beat the random opponent, the first things to inspect are:
+
+- `custom/noop_rate`, `custom/send_rate`, and `custom/invalid_action_rate`: high NOOP or invalid rates mean the policy is not using the candidate mask/action list effectively.
+- `custom/avg_candidates`: very small candidate counts usually mean the observation parser does not recognize owned planets or the agent has already lost map control.
+- `custom/target_owner_neutral_rate`, `custom/target_owner_enemy_rate`, and `custom/target_owner_self_rate`: a policy that mostly reinforces itself or never attacks/captures will not beat random play.
+- `train/approx_kl`: values that stay near zero while entropy remains high usually mean PPO is making tiny updates and needs more signal, a larger training budget, or easier curriculum/opponent settings.
+
+The candidate observation rows include explicit send/target-type/source-position/target-position features. Older checkpoints trained with the previous 6-feature candidate rows are not compatible with newly trained policies using the current observation shape.
+
 ## TensorBoard
 
 ```bash
