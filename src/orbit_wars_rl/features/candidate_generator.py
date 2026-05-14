@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Any
 
 from orbit_wars_rl.features.observation_encoder import get_planets, get_player
@@ -17,6 +18,21 @@ DEFAULT_SUN_RADIUS = 5.0
 TRAJECTORY_SAMPLE_STEP = 0.5
 MAX_INTERCEPT_TIME = 500.0
 _MISSING = object()
+
+
+@dataclass(frozen=True, slots=True)
+class PlanetMotion:
+    """Cached motion metadata for a planet during one candidate refresh."""
+
+    base_x: float
+    base_y: float
+    radius: float
+    angular_velocity: float | None
+    orbiting: bool
+    center_x: float
+    center_y: float
+    current_step: float
+    has_initial_position: bool
 
 
 def _is_dict(obj: Any) -> bool:
@@ -324,13 +340,78 @@ def _is_orbiting_planet(
     return orbital_radius + radius < 50.0
 
 
+def _build_planet_motion_cache(
+    planets: list[dict[str, Any]],
+    obs: Any = None,
+    config: Any = None,
+    initial_planets_by_id: dict[int, Any] | None = None,
+) -> dict[int, PlanetMotion]:
+    """Build one candidate-refresh cache for repeated planet motion lookups."""
+
+    center_x, center_y = _estimate_orbit_center(obs, config)
+    current_step = _current_step(obs)
+    motion_by_id: dict[int, PlanetMotion] = {}
+    for planet in planets:
+        planet_id = int(planet["id"])
+        initial = (
+            initial_planets_by_id.get(planet_id)
+            if initial_planets_by_id is not None
+            else _initial_planet_by_id(obs, planet_id)
+        )
+        has_initial = initial is not None
+        base_x, base_y, radius = (
+            _row_xy_radius(initial, planet)
+            if has_initial
+            else (
+                float(planet["x"]),
+                float(planet["y"]),
+                float(planet.get("radius", 0.0)),
+            )
+        )
+        orbital_radius = math.hypot(base_x - center_x, base_y - center_y)
+        motion_by_id[planet_id] = PlanetMotion(
+            base_x=base_x,
+            base_y=base_y,
+            radius=radius,
+            angular_velocity=_estimate_angular_motion(
+                planet, obs, config, initial_planets_by_id
+            ),
+            orbiting=orbital_radius + radius < 50.0,
+            center_x=center_x,
+            center_y=center_y,
+            current_step=current_step,
+            has_initial_position=has_initial,
+        )
+    return motion_by_id
+
+
 def _planet_position_at(
     planet: dict[str, Any],
     turns_from_now: float,
     obs: Any = None,
     config: Any = None,
     initial_planets_by_id: dict[int, Any] | None = None,
+    planet_motion_by_id: dict[int, PlanetMotion] | None = None,
 ) -> tuple[float, float]:
+    motion = (
+        planet_motion_by_id.get(int(planet["id"]))
+        if planet_motion_by_id is not None
+        else None
+    )
+    if motion is not None:
+        if motion.angular_velocity is None or not motion.orbiting:
+            return float(planet["x"]), float(planet["y"])
+        step_offset = motion.current_step if motion.has_initial_position else 0.0
+        delta = motion.angular_velocity * (step_offset + turns_from_now)
+        radius_x = motion.base_x - motion.center_x
+        radius_y = motion.base_y - motion.center_y
+        sin_delta = math.sin(delta)
+        cos_delta = math.cos(delta)
+        return (
+            motion.center_x + radius_x * cos_delta - radius_y * sin_delta,
+            motion.center_y + radius_x * sin_delta + radius_y * cos_delta,
+        )
+
     velocity = _estimate_angular_motion(planet, obs, config, initial_planets_by_id)
     if velocity is None or not _is_orbiting_planet(
         planet, obs, config, initial_planets_by_id
@@ -368,6 +449,7 @@ def _intercept_solution(
     obs: Any = None,
     config: Any = None,
     initial_planets_by_id: dict[int, Any] | None = None,
+    planet_motion_by_id: dict[int, PlanetMotion] | None = None,
 ) -> tuple[float, float, float, bool] | None:
     """Return (angle, travel_time, distance, used_intercept) for a valid shot."""
 
@@ -377,9 +459,19 @@ def _intercept_solution(
 
     source_x = float(source["x"])
     source_y = float(source["y"])
+    target_motion = (
+        planet_motion_by_id.get(int(target["id"]))
+        if planet_motion_by_id is not None
+        else None
+    )
     moving_target = (
-        _estimate_angular_motion(target, obs, config, initial_planets_by_id) is not None
-        and _is_orbiting_planet(target, obs, config, initial_planets_by_id)
+        target_motion.angular_velocity is not None and target_motion.orbiting
+        if target_motion is not None
+        else (
+            _estimate_angular_motion(target, obs, config, initial_planets_by_id)
+            is not None
+            and _is_orbiting_planet(target, obs, config, initial_planets_by_id)
+        )
     )
 
     if not moving_target:
@@ -396,7 +488,7 @@ def _intercept_solution(
 
     def residual(t: float) -> float:
         target_x, target_y = _planet_position_at(
-            target, t, obs, config, initial_planets_by_id
+            target, t, obs, config, initial_planets_by_id, planet_motion_by_id
         )
         return math.hypot(target_x - source_x, target_y - source_y) / speed - t
 
@@ -420,7 +512,7 @@ def _intercept_solution(
             high = mid
     travel_time = high
     target_x, target_y = _planet_position_at(
-        target, travel_time, obs, config, initial_planets_by_id
+        target, travel_time, obs, config, initial_planets_by_id, planet_motion_by_id
     )
     distance = math.hypot(target_x - source_x, target_y - source_y)
     if distance <= 0.0 or abs(distance / speed - travel_time) > 0.05:
@@ -467,6 +559,7 @@ def _trajectory_is_safe(
     obs: Any = None,
     config: Any = None,
     initial_planets_by_id: dict[int, Any] | None = None,
+    planet_motion_by_id: dict[int, PlanetMotion] | None = None,
 ) -> bool:
     source_x = float(source["x"])
     source_y = float(source["y"])
@@ -512,7 +605,7 @@ def _trajectory_is_safe(
             if planet_id == target_id:
                 continue
             px, py = _planet_position_at(
-                planet, t, obs, config, initial_planets_by_id
+                planet, t, obs, config, initial_planets_by_id, planet_motion_by_id
             )
             radius = float(planet.get("radius", 0.0))
             if math.hypot(px - fleet_x, py - fleet_y) <= radius:
@@ -550,13 +643,14 @@ def _build_send_candidate(
     config: Any = None,
     planets: list[dict[str, Any]] | None = None,
     initial_planets_by_id: dict[int, Any] | None = None,
+    planet_motion_by_id: dict[int, PlanetMotion] | None = None,
 ) -> dict[str, Any] | None:
     ships = int(math.floor(available * fraction))
     if ships <= 0:
         return None
 
     solution = _intercept_solution(
-        source, target, ships, obs, config, initial_planets_by_id
+        source, target, ships, obs, config, initial_planets_by_id, planet_motion_by_id
     )
     if solution is None:
         return None
@@ -574,6 +668,7 @@ def _build_send_candidate(
         obs,
         config,
         initial_planets_by_id,
+        planet_motion_by_id,
     ):
         return None
 
@@ -656,6 +751,9 @@ def generate_candidates(
 
     planets = get_planets(obs)
     initial_planets_by_id = _initial_planet_index(obs)
+    planet_motion_by_id = _build_planet_motion_cache(
+        planets, obs, config, initial_planets_by_id
+    )
     player = get_player(obs)
     owned = [
         p
@@ -689,6 +787,7 @@ def generate_candidates(
                     config,
                     planets,
                     initial_planets_by_id,
+                    planet_motion_by_id,
                 )
                 if candidate is None:
                     continue
