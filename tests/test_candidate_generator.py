@@ -259,3 +259,83 @@ def test_candidate_generator_filters_routes_into_moving_planets():
         for candidate in candidates
         if candidate.get("type") == "send"
     )
+
+
+class AbcHostileMapping:
+    """Mapping-like object whose __class__ breaks collections.abc isinstance checks."""
+
+    def __init__(self, values):
+        self._values = values
+
+    @property
+    def __class__(self):
+        raise RuntimeError("ABC instance checks should not inspect __class__")
+
+    def get(self, key, default=None):
+        return self._values.get(key, default)
+
+
+class AbcHostileSequence:
+    """Sequence-like row whose __class__ breaks collections.abc isinstance checks."""
+
+    def __init__(self, values):
+        self._values = values
+
+    @property
+    def __class__(self):
+        raise RuntimeError("ABC instance checks should not inspect __class__")
+
+    def __len__(self):
+        return len(self._values)
+
+    def __getitem__(self, index):
+        return self._values[index]
+
+
+def test_candidate_generator_handles_abc_hostile_observation_rows():
+    obs = AbcHostileMapping(
+        {
+            "player": 0,
+            "step": 10,
+            "angular_velocity": {"1": 0.05},
+            "initial_planets": [
+                AbcHostileSequence([0, 0, 20.0, 50.0, 2.0, 100, 2]),
+                AbcHostileSequence([1, -1, 60.0, 50.0, 2.0, 12, 3]),
+            ],
+            "planets": [
+                AbcHostileSequence([0, 0, 20.0, 50.0, 2.0, 100, 2]),
+                AbcHostileSequence([1, -1, 60.0, 50.0, 2.0, 12, 3]),
+            ],
+            "fleets": [],
+        }
+    )
+
+    candidates = generate_candidates(obs, max_candidates=4, config={"maxSpeed": 6.0})
+    send_candidate = next(
+        candidate for candidate in candidates if candidate.get("type") == "send"
+    )
+
+    assert send_candidate["intercept_angle_used"] is True
+
+
+class MappingWithForbiddenMissingAttrs:
+    """Mapping-like object that must not be probed with normal getattr()."""
+
+    def __init__(self, values):
+        self._values = values
+
+    def get(self, key, default=None):
+        return self._values.get(key, default)
+
+    def __getattr__(self, name):
+        raise AssertionError(f"unexpected attribute lookup for {name}")
+
+
+def test_candidate_generator_does_not_probe_missing_mapping_attrs():
+    candidates = generate_candidates(
+        sample_obs(),
+        max_candidates=4,
+        config=MappingWithForbiddenMissingAttrs({"maxSpeed": 6.0}),
+    )
+
+    assert any(candidate.get("type") == "send" for candidate in candidates)

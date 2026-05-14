@@ -9,25 +9,66 @@ object and future environment versions may add fields.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
 
 BOARD_SIZE = 100.0
 DEFAULT_EPISODE_STEPS = 500.0
+_MISSING = object()
 PLANET_FEATURES = 9
 FLEET_FEATURES = 8
 CANDIDATE_FEATURES = 12
 GLOBAL_FEATURES = 6
 
 
+def _is_dict(obj: Any) -> bool:
+    return issubclass(type(obj), dict)
+
+
+def _direct_attr(obj: Any, name: str, default: Any = _MISSING) -> Any:
+    try:
+        return object.__getattribute__(obj, name)
+    except AttributeError:
+        return default
+
+
+def _is_non_string_sequence(obj: Any) -> bool:
+    obj_type = type(obj)
+    if issubclass(obj_type, (str, bytes, bytearray)):
+        return False
+    if issubclass(obj_type, (list, tuple)):
+        return True
+    return (
+        _direct_attr(obj, "__len__") is not _MISSING
+        and _direct_attr(obj, "__getitem__") is not _MISSING
+    )
+
+
+def _mapping_value(obj: Any, key: str, default: Any = None) -> Any:
+    if _is_dict(obj):
+        return obj.get(key, default)
+    getter = _direct_attr(obj, "get", default=None)
+    if callable(getter):
+        sentinel = object()
+        value = getter(key, sentinel)
+        return default if value is sentinel else value
+    return default
+
+
+def _is_ndarray(obj: Any) -> bool:
+    return issubclass(type(obj), np.ndarray)
+
+
 def _get(obj: Any, key: str, default: Any = None) -> Any:
     if obj is None:
         return default
-    if isinstance(obj, Mapping):
-        return obj.get(key, default)
-    return getattr(obj, key, default)
+    value = _mapping_value(obj, key, default=_MISSING)
+    if value is not _MISSING:
+        return value
+    if callable(_direct_attr(obj, "get", default=None)):
+        return default
+    return _direct_attr(obj, key, default)
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -51,18 +92,20 @@ def _rows(obs: Any, key: str) -> list[Any]:
     rows = _get(obs, key, [])
     if rows is None:
         return []
-    if isinstance(rows, np.ndarray):
+    if _is_ndarray(rows):
         rows = rows.tolist()
-    if not isinstance(rows, list | tuple):
+    if not _is_non_string_sequence(rows):
         return []
     return list(rows)
 
 
 def _row_value(row: Any, index: int, name: str, default: Any = 0) -> Any:
-    if isinstance(row, Mapping):
-        return row.get(name, default)
-    if hasattr(row, name):
-        return getattr(row, name)
+    value = _mapping_value(row, name, default=_MISSING)
+    if value is not _MISSING:
+        return value
+    value = _direct_attr(row, name, default=_MISSING)
+    if value is not _MISSING:
+        return value
     try:
         return row[index]
     except (TypeError, IndexError, KeyError):
@@ -128,9 +171,9 @@ def _owner_features(owner: int, player: int) -> tuple[float, float]:
     return 0.0, 1.0
 
 
-def _candidate_features(candidate: Mapping[str, Any] | Any) -> list[float]:
+def _candidate_features(candidate: Any) -> list[float]:
     raw_features = _get(candidate, "candidate_features", [])
-    if isinstance(raw_features, np.ndarray):
+    if _is_ndarray(raw_features):
         raw_features = raw_features.tolist()
     if not isinstance(raw_features, list | tuple):
         raw_features = []

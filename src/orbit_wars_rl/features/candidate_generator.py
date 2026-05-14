@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
 from typing import Any
 
 from orbit_wars_rl.features.observation_encoder import get_planets, get_player
@@ -17,16 +16,55 @@ DEFAULT_MAX_FLEET_SPEED = 6.0
 DEFAULT_SUN_RADIUS = 5.0
 TRAJECTORY_SAMPLE_STEP = 0.5
 MAX_INTERCEPT_TIME = 500.0
+_MISSING = object()
+
+
+def _is_dict(obj: Any) -> bool:
+    return issubclass(type(obj), dict)
+
+
+def _direct_attr(obj: Any, name: str, default: Any = _MISSING) -> Any:
+    try:
+        return object.__getattribute__(obj, name)
+    except AttributeError:
+        return default
+
+
+def _is_non_string_sequence(obj: Any) -> bool:
+    obj_type = type(obj)
+    if issubclass(obj_type, (str, bytes, bytearray)):
+        return False
+    if issubclass(obj_type, (list, tuple)):
+        return True
+    return (
+        _direct_attr(obj, "__len__") is not _MISSING
+        and _direct_attr(obj, "__getitem__") is not _MISSING
+    )
+
+
+def _mapping_value(obj: Any, name: str, default: Any = None) -> Any:
+    if _is_dict(obj):
+        return obj[name] if name in obj else default
+    getter = _direct_attr(obj, "get", default=None)
+    if callable(getter):
+        sentinel = object()
+        value = getter(name, sentinel)
+        return default if value is sentinel else value
+    return default
 
 
 def _field(obj: Any, *names: str, default: Any = None) -> Any:
     for name in names:
         if obj is None:
             continue
-        if isinstance(obj, Mapping) and name in obj:
-            return obj[name]
-        if hasattr(obj, name):
-            return getattr(obj, name)
+        value = _mapping_value(obj, name, default=_MISSING)
+        if value is not _MISSING:
+            return value
+        if callable(_direct_attr(obj, "get", default=None)):
+            continue
+        value = _direct_attr(obj, name, default=_MISSING)
+        if value is not _MISSING:
+            return value
     return default
 
 
@@ -127,7 +165,7 @@ def _fleet_speed(ships: int, obs: Any = None, config: Any = None) -> float:
 
 def _row_id(row: Any, default: int) -> int:
     value = _field(row, "id", default=None)
-    if value is None and isinstance(row, Sequence) and not isinstance(row, str | bytes):
+    if value is None and _is_non_string_sequence(row):
         try:
             value = row[0]
         except (IndexError, TypeError):
@@ -140,9 +178,14 @@ def _initial_planet_by_id(obs: Any, planet_id: int) -> Any | None:
     initial_rows = _field(obs, "initial_planets", "initialPlanets", default=None)
     if initial_rows is None:
         return None
-    if isinstance(initial_rows, Mapping):
-        return initial_rows.get(planet_id, initial_rows.get(str(planet_id)))
-    if isinstance(initial_rows, Sequence) and not isinstance(initial_rows, str | bytes):
+    if _is_dict(initial_rows) or callable(_direct_attr(initial_rows, "get", None)):
+        value = _mapping_value(initial_rows, planet_id, default=None)
+        return (
+            _mapping_value(initial_rows, str(planet_id), default=None)
+            if value is None
+            else value
+        )
+    if _is_non_string_sequence(initial_rows):
         for index, row in enumerate(initial_rows):
             if _row_id(row, index) == planet_id:
                 return row
@@ -153,7 +196,7 @@ def _row_xy_radius(row: Any, fallback: dict[str, Any]) -> tuple[float, float, fl
     x = _finite_float(_field(row, "x", default=None))
     y = _finite_float(_field(row, "y", default=None))
     radius = _finite_float(_field(row, "radius", default=None))
-    if isinstance(row, Sequence) and not isinstance(row, str | bytes):
+    if _is_non_string_sequence(row):
         if x is None and len(row) > 2:
             x = _finite_float(row[2])
         if y is None and len(row) > 3:
@@ -173,9 +216,14 @@ def _angular_velocity_from_collection(collection: Any, planet_id: int) -> float 
     scalar = _finite_float(collection)
     if scalar is not None:
         return scalar
-    if isinstance(collection, Mapping):
-        return _finite_float(collection.get(planet_id, collection.get(str(planet_id))))
-    if isinstance(collection, Sequence) and not isinstance(collection, str | bytes):
+    if _is_dict(collection) or callable(_direct_attr(collection, "get", None)):
+        value = _mapping_value(collection, planet_id, default=None)
+        return _finite_float(
+            _mapping_value(collection, str(planet_id), default=None)
+            if value is None
+            else value
+        )
+    if _is_non_string_sequence(collection):
         if planet_id < len(collection):
             return _finite_float(collection[planet_id])
         for index, row in enumerate(collection):
@@ -186,7 +234,7 @@ def _angular_velocity_from_collection(collection: Any, planet_id: int) -> float 
                 )
                 if value is not None:
                     return value
-                if isinstance(row, Sequence) and not isinstance(row, str | bytes):
+                if _is_non_string_sequence(row):
                     for item in row[1:]:
                         value = _finite_float(item)
                         if value is not None:
