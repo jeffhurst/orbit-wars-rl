@@ -46,6 +46,47 @@ def test_reset_info_reports_synthetic_fallback_when_active(monkeypatch):
     assert info["fallback_reason"] == "test fallback"
 
 
+def test_reset_passes_seed_to_supported_kaggle_reset(monkeypatch):
+    class AgentState:
+        def __init__(self, observation):
+            self.observation = observation
+            self.reward = 0.0
+            self.status = "ACTIVE"
+
+    class FakeKaggleEnv:
+        def __init__(self):
+            self.configuration = None
+            self.steps = []
+            self.reset_num_players = None
+            self.reset_seed = None
+            self.reset_options = None
+            self.state = [
+                AgentState({"player": 0, "planets": [], "fleets": []}),
+                AgentState({"player": 1, "planets": [], "fleets": []}),
+            ]
+
+        def reset(self, num_players=None, seed=None, options=None):
+            self.reset_num_players = num_players
+            self.reset_seed = seed
+            self.reset_options = options
+            return self.state
+
+    fake_kaggle_env = FakeKaggleEnv()
+    env = OrbitWarsGym(max_candidates=8, max_planets=8, max_fleets=8)
+
+    def fake_make_env(seed=None, options=None):
+        return fake_kaggle_env
+
+    monkeypatch.setattr(env, "_make_env", fake_make_env)
+    _, info = env.reset(seed=987, options={"map": "regression-map"})
+
+    assert fake_kaggle_env.reset_num_players == 2
+    assert fake_kaggle_env.reset_seed == 987
+    assert fake_kaggle_env.reset_options == {"map": "regression-map"}
+    assert info["seed"] == 987
+    assert info["kaggle_seed_applied"] is True
+
+
 def test_require_real_kaggle_env_rejects_synthetic_fallback(monkeypatch):
     env = OrbitWarsGym(max_candidates=8, max_planets=8, max_fleets=8)
 
