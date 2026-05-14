@@ -1,5 +1,6 @@
 import math
 
+import orbit_wars_rl.features.candidate_generator as candidate_generator
 from orbit_wars_rl.features.candidate_generator import generate_candidates
 from orbit_wars_rl.features.metrics import make_action_metrics
 from orbit_wars_rl.features.observation_encoder import CANDIDATE_FEATURES
@@ -65,6 +66,27 @@ def test_candidate_generator_reserves_enemy_attacks_with_many_options():
     assert any(
         candidate["purpose"] == "attack_enemy" for candidate in send_candidates
     )
+
+
+def test_candidate_generator_limits_build_attempts_before_validation(monkeypatch):
+    possible_attempts = 2 * 3 * 3
+    calls = 0
+    original_build_send_candidate = candidate_generator._build_send_candidate
+
+    def counting_build_send_candidate(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_build_send_candidate(*args, **kwargs)
+
+    monkeypatch.setattr(
+        candidate_generator, "_build_send_candidate", counting_build_send_candidate
+    )
+
+    candidates = generate_candidates(sample_obs(), max_candidates=2)
+
+    assert candidates[0] == {"type": "noop"}
+    assert len(candidates) <= 2
+    assert calls < possible_attempts
 
 
 def test_candidate_generator_always_includes_noop():
