@@ -174,6 +174,25 @@ def _row_id(row: Any, default: int) -> int:
     return row_id if row_id is not None else default
 
 
+def _initial_planet_index(obs: Any) -> dict[int, Any]:
+    initial_rows = _field(obs, "initial_planets", "initialPlanets", default=None)
+    if initial_rows is None:
+        return {}
+    if _is_dict(initial_rows) or callable(_direct_attr(initial_rows, "get", None)):
+        index: dict[int, Any] = {}
+        items = _direct_attr(initial_rows, "items", default=None)
+        if callable(items):
+            for key, row in items():
+                row_id = _finite_int(key)
+                if row_id is None:
+                    continue
+                index[row_id] = row
+        return index
+    if _is_non_string_sequence(initial_rows):
+        return {_row_id(row, index): row for index, row in enumerate(initial_rows)}
+    return {}
+
+
 def _initial_planet_by_id(obs: Any, planet_id: int) -> Any | None:
     initial_rows = _field(obs, "initial_planets", "initialPlanets", default=None)
     if initial_rows is None:
@@ -246,11 +265,16 @@ def _estimate_angular_motion(
     planet: dict[str, Any],
     obs: Any = None,
     config: Any = None,
+    initial_planets_by_id: dict[int, Any] | None = None,
 ) -> float | None:
     """Estimate a planet's angular velocity in radians/turn if metadata exists."""
 
     planet_id = int(planet["id"])
-    initial_planet = _initial_planet_by_id(obs, planet_id)
+    initial_planet = (
+        initial_planets_by_id.get(planet_id)
+        if initial_planets_by_id is not None
+        else _initial_planet_by_id(obs, planet_id)
+    )
     for container in (planet, initial_planet, obs, config):
         velocity = _finite_float(
             _field(
@@ -279,10 +303,18 @@ def _current_step(obs: Any = None) -> float:
 
 
 def _is_orbiting_planet(
-    planet: dict[str, Any], obs: Any = None, config: Any = None
+    planet: dict[str, Any],
+    obs: Any = None,
+    config: Any = None,
+    initial_planets_by_id: dict[int, Any] | None = None,
 ) -> bool:
     center_x, center_y = _estimate_orbit_center(obs, config)
-    initial = _initial_planet_by_id(obs, int(planet["id"]))
+    planet_id = int(planet["id"])
+    initial = (
+        initial_planets_by_id.get(planet_id)
+        if initial_planets_by_id is not None
+        else _initial_planet_by_id(obs, planet_id)
+    )
     x, y, radius = _row_xy_radius(initial, planet) if initial is not None else (
         float(planet["x"]),
         float(planet["y"]),
@@ -297,13 +329,21 @@ def _planet_position_at(
     turns_from_now: float,
     obs: Any = None,
     config: Any = None,
+    initial_planets_by_id: dict[int, Any] | None = None,
 ) -> tuple[float, float]:
-    velocity = _estimate_angular_motion(planet, obs, config)
-    if velocity is None or not _is_orbiting_planet(planet, obs, config):
+    velocity = _estimate_angular_motion(planet, obs, config, initial_planets_by_id)
+    if velocity is None or not _is_orbiting_planet(
+        planet, obs, config, initial_planets_by_id
+    ):
         return float(planet["x"]), float(planet["y"])
 
     center_x, center_y = _estimate_orbit_center(obs, config)
-    initial = _initial_planet_by_id(obs, int(planet["id"]))
+    planet_id = int(planet["id"])
+    initial = (
+        initial_planets_by_id.get(planet_id)
+        if initial_planets_by_id is not None
+        else _initial_planet_by_id(obs, planet_id)
+    )
     if initial is not None:
         base_x, base_y, _ = _row_xy_radius(initial, planet)
         delta = velocity * (_current_step(obs) + turns_from_now)
@@ -327,6 +367,7 @@ def _intercept_solution(
     ships: int,
     obs: Any = None,
     config: Any = None,
+    initial_planets_by_id: dict[int, Any] | None = None,
 ) -> tuple[float, float, float, bool] | None:
     """Return (angle, travel_time, distance, used_intercept) for a valid shot."""
 
@@ -337,8 +378,8 @@ def _intercept_solution(
     source_x = float(source["x"])
     source_y = float(source["y"])
     moving_target = (
-        _estimate_angular_motion(target, obs, config) is not None
-        and _is_orbiting_planet(target, obs, config)
+        _estimate_angular_motion(target, obs, config, initial_planets_by_id) is not None
+        and _is_orbiting_planet(target, obs, config, initial_planets_by_id)
     )
 
     if not moving_target:
@@ -354,7 +395,9 @@ def _intercept_solution(
         )
 
     def residual(t: float) -> float:
-        target_x, target_y = _planet_position_at(target, t, obs, config)
+        target_x, target_y = _planet_position_at(
+            target, t, obs, config, initial_planets_by_id
+        )
         return math.hypot(target_x - source_x, target_y - source_y) / speed - t
 
     low = 0.0
@@ -376,7 +419,9 @@ def _intercept_solution(
         else:
             high = mid
     travel_time = high
-    target_x, target_y = _planet_position_at(target, travel_time, obs, config)
+    target_x, target_y = _planet_position_at(
+        target, travel_time, obs, config, initial_planets_by_id
+    )
     distance = math.hypot(target_x - source_x, target_y - source_y)
     if distance <= 0.0 or abs(distance / speed - travel_time) > 0.05:
         return None
@@ -421,6 +466,7 @@ def _trajectory_is_safe(
     planets: list[dict[str, Any]],
     obs: Any = None,
     config: Any = None,
+    initial_planets_by_id: dict[int, Any] | None = None,
 ) -> bool:
     source_x = float(source["x"])
     source_y = float(source["y"])
@@ -465,7 +511,9 @@ def _trajectory_is_safe(
                 continue
             if planet_id == target_id:
                 continue
-            px, py = _planet_position_at(planet, t, obs, config)
+            px, py = _planet_position_at(
+                planet, t, obs, config, initial_planets_by_id
+            )
             radius = float(planet.get("radius", 0.0))
             if math.hypot(px - fleet_x, py - fleet_y) <= radius:
                 return False
@@ -501,19 +549,31 @@ def _build_send_candidate(
     obs: dict,
     config: Any = None,
     planets: list[dict[str, Any]] | None = None,
+    initial_planets_by_id: dict[int, Any] | None = None,
 ) -> dict[str, Any] | None:
     ships = int(math.floor(available * fraction))
     if ships <= 0:
         return None
 
-    solution = _intercept_solution(source, target, ships, obs, config)
+    solution = _intercept_solution(
+        source, target, ships, obs, config, initial_planets_by_id
+    )
     if solution is None:
         return None
     angle, travel_time, distance, intercept_angle_used = solution
     speed = _fleet_speed(ships, obs, config)
     planet_rows = planets or get_planets(obs)
     if not _trajectory_is_safe(
-        source, target, angle, travel_time, distance, speed, planet_rows, obs, config
+        source,
+        target,
+        angle,
+        travel_time,
+        distance,
+        speed,
+        planet_rows,
+        obs,
+        config,
+        initial_planets_by_id,
     ):
         return None
 
@@ -595,6 +655,7 @@ def generate_candidates(
         return candidates
 
     planets = get_planets(obs)
+    initial_planets_by_id = _initial_planet_index(obs)
     player = get_player(obs)
     owned = [
         p
@@ -619,7 +680,15 @@ def generate_candidates(
                 continue
             for fraction in SHIP_FRACTIONS:
                 candidate = _build_send_candidate(
-                    source, target, fraction, available, player, obs, config, planets
+                    source,
+                    target,
+                    fraction,
+                    available,
+                    player,
+                    obs,
+                    config,
+                    planets,
+                    initial_planets_by_id,
                 )
                 if candidate is None:
                     continue
