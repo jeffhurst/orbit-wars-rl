@@ -316,3 +316,26 @@ def test_candidate_generator_handles_abc_hostile_observation_rows():
     )
 
     assert send_candidate["intercept_angle_used"] is True
+
+
+class MappingWithForbiddenMissingAttrs:
+    """Mapping-like object that must not be probed with normal getattr()."""
+
+    def __init__(self, values):
+        self._values = values
+
+    def get(self, key, default=None):
+        return self._values.get(key, default)
+
+    def __getattr__(self, name):
+        raise AssertionError(f"unexpected attribute lookup for {name}")
+
+
+def test_candidate_generator_does_not_probe_missing_mapping_attrs():
+    candidates = generate_candidates(
+        sample_obs(),
+        max_candidates=4,
+        config=MappingWithForbiddenMissingAttrs({"maxSpeed": 6.0}),
+    )
+
+    assert any(candidate.get("type") == "send" for candidate in candidates)

@@ -26,19 +26,29 @@ def _is_dict(obj: Any) -> bool:
     return issubclass(type(obj), dict)
 
 
+def _direct_attr(obj: Any, name: str, default: Any = _MISSING) -> Any:
+    try:
+        return object.__getattribute__(obj, name)
+    except AttributeError:
+        return default
+
+
 def _is_non_string_sequence(obj: Any) -> bool:
     obj_type = type(obj)
     if issubclass(obj_type, (str, bytes, bytearray)):
         return False
     if issubclass(obj_type, (list, tuple)):
         return True
-    return hasattr(obj, "__len__") and hasattr(obj, "__getitem__")
+    return (
+        _direct_attr(obj, "__len__") is not _MISSING
+        and _direct_attr(obj, "__getitem__") is not _MISSING
+    )
 
 
 def _mapping_value(obj: Any, key: str, default: Any = None) -> Any:
     if _is_dict(obj):
         return obj.get(key, default)
-    getter = getattr(obj, "get", None)
+    getter = _direct_attr(obj, "get", default=None)
     if callable(getter):
         sentinel = object()
         value = getter(key, sentinel)
@@ -56,7 +66,9 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
     value = _mapping_value(obj, key, default=_MISSING)
     if value is not _MISSING:
         return value
-    return getattr(obj, key, default)
+    if callable(_direct_attr(obj, "get", default=None)):
+        return default
+    return _direct_attr(obj, key, default)
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -91,8 +103,9 @@ def _row_value(row: Any, index: int, name: str, default: Any = 0) -> Any:
     value = _mapping_value(row, name, default=_MISSING)
     if value is not _MISSING:
         return value
-    if hasattr(row, name):
-        return getattr(row, name)
+    value = _direct_attr(row, name, default=_MISSING)
+    if value is not _MISSING:
+        return value
     try:
         return row[index]
     except (TypeError, IndexError, KeyError):

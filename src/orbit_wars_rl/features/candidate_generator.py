@@ -23,19 +23,29 @@ def _is_dict(obj: Any) -> bool:
     return issubclass(type(obj), dict)
 
 
+def _direct_attr(obj: Any, name: str, default: Any = _MISSING) -> Any:
+    try:
+        return object.__getattribute__(obj, name)
+    except AttributeError:
+        return default
+
+
 def _is_non_string_sequence(obj: Any) -> bool:
     obj_type = type(obj)
     if issubclass(obj_type, (str, bytes, bytearray)):
         return False
     if issubclass(obj_type, (list, tuple)):
         return True
-    return hasattr(obj, "__len__") and hasattr(obj, "__getitem__")
+    return (
+        _direct_attr(obj, "__len__") is not _MISSING
+        and _direct_attr(obj, "__getitem__") is not _MISSING
+    )
 
 
 def _mapping_value(obj: Any, name: str, default: Any = None) -> Any:
     if _is_dict(obj):
         return obj[name] if name in obj else default
-    getter = getattr(obj, "get", None)
+    getter = _direct_attr(obj, "get", default=None)
     if callable(getter):
         sentinel = object()
         value = getter(name, sentinel)
@@ -50,8 +60,11 @@ def _field(obj: Any, *names: str, default: Any = None) -> Any:
         value = _mapping_value(obj, name, default=_MISSING)
         if value is not _MISSING:
             return value
-        if hasattr(obj, name):
-            return getattr(obj, name)
+        if callable(_direct_attr(obj, "get", default=None)):
+            continue
+        value = _direct_attr(obj, name, default=_MISSING)
+        if value is not _MISSING:
+            return value
     return default
 
 
@@ -165,7 +178,7 @@ def _initial_planet_by_id(obs: Any, planet_id: int) -> Any | None:
     initial_rows = _field(obs, "initial_planets", "initialPlanets", default=None)
     if initial_rows is None:
         return None
-    if _is_dict(initial_rows) or callable(getattr(initial_rows, "get", None)):
+    if _is_dict(initial_rows) or callable(_direct_attr(initial_rows, "get", None)):
         value = _mapping_value(initial_rows, planet_id, default=None)
         return (
             _mapping_value(initial_rows, str(planet_id), default=None)
@@ -203,7 +216,7 @@ def _angular_velocity_from_collection(collection: Any, planet_id: int) -> float 
     scalar = _finite_float(collection)
     if scalar is not None:
         return scalar
-    if _is_dict(collection) or callable(getattr(collection, "get", None)):
+    if _is_dict(collection) or callable(_direct_attr(collection, "get", None)):
         value = _mapping_value(collection, planet_id, default=None)
         return _finite_float(
             _mapping_value(collection, str(planet_id), default=None)
