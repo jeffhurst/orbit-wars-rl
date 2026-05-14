@@ -18,6 +18,55 @@ def sample_obs():
     }
 
 
+def many_owned_and_target_obs():
+    return {
+        "player": 0,
+        "planets": [
+            [0, 0, 10.0, 10.0, 2.0, 50, 2],
+            [1, 0, 20.0, 10.0, 2.0, 45, 2],
+            [2, 0, 30.0, 10.0, 2.0, 40, 2],
+            [3, 0, 40.0, 10.0, 2.0, 35, 2],
+            [4, 0, 50.0, 10.0, 2.0, 30, 2],
+            [5, -1, 20.0, 60.0, 2.0, 8, 1],
+            [6, -1, 30.0, 60.0, 2.0, 10, 1],
+            [7, -1, 40.0, 60.0, 2.0, 12, 1],
+            [8, 1, 70.0, 70.0, 2.0, 15, 2],
+            [9, 1, 80.0, 70.0, 2.0, 18, 2],
+            [10, 1, 90.0, 70.0, 2.0, 20, 2],
+        ],
+        "fleets": [],
+    }
+
+
+def test_candidate_generator_balances_sources_with_many_options():
+    candidates = generate_candidates(many_owned_and_target_obs(), max_candidates=6)
+    send_candidates = [
+        candidate for candidate in candidates if candidate.get("type") == "send"
+    ]
+
+    assert candidates[0] == {"type": "noop"}
+    assert len(send_candidates) == 5
+    assert {candidate["from_planet_id"] for candidate in send_candidates} == {
+        0,
+        1,
+        2,
+        3,
+        4,
+    }
+
+
+def test_candidate_generator_reserves_enemy_attacks_with_many_options():
+    candidates = generate_candidates(many_owned_and_target_obs(), max_candidates=6)
+    send_candidates = [
+        candidate for candidate in candidates if candidate.get("type") == "send"
+    ]
+
+    assert len({candidate["from_planet_id"] for candidate in send_candidates}) > 1
+    assert any(
+        candidate["purpose"] == "attack_enemy" for candidate in send_candidates
+    )
+
+
 def test_candidate_generator_always_includes_noop():
     candidates = generate_candidates(sample_obs(), max_candidates=8)
     assert candidates[0] == {"type": "noop"}
