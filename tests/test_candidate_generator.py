@@ -161,3 +161,101 @@ def test_action_metrics_report_intercept_angle_usage():
 
     assert metrics["intercept_angle_rate"] == 1.0
     assert metrics["candidate_pool_intercept_angle_rate"] > 0.0
+
+
+def test_candidate_generator_uses_logarithmic_speed_for_intercept_angle():
+    obs = {
+        "player": 0,
+        "angular_velocity": 0.05,
+        "planets": [
+            [0, 0, 20.0, 20.0, 2.0, 1002, 2],
+            [1, -1, 60.0, 20.0, 2.0, 12, 3],
+        ],
+        "fleets": [],
+    }
+
+    candidates = generate_candidates(obs, max_candidates=4, config={"maxSpeed": 6.0})
+    quarter = next(
+        candidate
+        for candidate in candidates
+        if candidate.get("type") == "send" and candidate["ship_fraction"] == 0.25
+    )
+    half = next(
+        candidate
+        for candidate in candidates
+        if candidate.get("type") == "send" and candidate["ship_fraction"] == 0.5
+    )
+
+    assert quarter["intercept_angle_used"] is True
+    assert half["intercept_angle_used"] is True
+    assert half["fleet_speed"] > quarter["fleet_speed"]
+    assert half["travel_time"] < quarter["travel_time"]
+    assert not math.isclose(half["angle"], quarter["angle"])
+
+
+def test_candidate_generator_uses_initial_planets_and_step_for_orbit_prediction():
+    obs = {
+        "player": 0,
+        "step": 10,
+        "angular_velocity": {"1": 0.05},
+        "initial_planets": [
+            [0, 0, 20.0, 50.0, 2.0, 100, 2],
+            [1, -1, 60.0, 50.0, 2.0, 12, 3],
+        ],
+        "planets": [
+            [0, 0, 20.0, 50.0, 2.0, 100, 2],
+            [1, -1, 60.0, 50.0, 2.0, 12, 3],
+        ],
+        "fleets": [],
+    }
+
+    candidates = generate_candidates(obs, max_candidates=4, config={"maxSpeed": 6.0})
+    send_candidate = next(
+        candidate for candidate in candidates if candidate.get("type") == "send"
+    )
+
+    assert send_candidate["intercept_angle_used"] is True
+    assert send_candidate["angle"] > 0.0
+
+
+def test_candidate_generator_filters_routes_through_sun():
+    obs = {
+        "player": 0,
+        "planets": [
+            [0, 0, 20.0, 50.0, 2.0, 100, 2],
+            [1, -1, 80.0, 50.0, 2.0, 12, 3],
+        ],
+        "fleets": [],
+    }
+
+    candidates = generate_candidates(
+        obs, max_candidates=8, config={"maxSpeed": 6.0, "sunRadius": 6.0}
+    )
+
+    assert candidates == [{"type": "noop"}]
+
+
+def test_candidate_generator_filters_routes_into_moving_planets():
+    obs = {
+        "player": 0,
+        "angular_velocity": {"2": 0.0},
+        "initial_planets": [
+            [0, 0, 20.0, 20.0, 2.0, 100, 2],
+            [1, -1, 80.0, 20.0, 2.0, 12, 3],
+            [2, -1, 50.0, 20.0, 3.0, 12, 3],
+        ],
+        "planets": [
+            [0, 0, 20.0, 20.0, 2.0, 100, 2],
+            [1, -1, 80.0, 20.0, 2.0, 12, 3],
+            [2, -1, 50.0, 20.0, 3.0, 12, 3],
+        ],
+        "fleets": [],
+    }
+
+    candidates = generate_candidates(obs, max_candidates=16, config={"maxSpeed": 6.0})
+
+    assert all(
+        candidate.get("target_planet_id") != 1
+        for candidate in candidates
+        if candidate.get("type") == "send"
+    )
