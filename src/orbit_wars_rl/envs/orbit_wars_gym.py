@@ -75,6 +75,8 @@ class OrbitWarsGym(gym.Env):
         }
         self._fallback_step = 0
         self._fallback_reason: str | None = None
+        self._last_seed: int | None = None
+        self._kaggle_seed_applied = False
 
     @property
     def using_fallback_env(self) -> bool:
@@ -100,8 +102,11 @@ class OrbitWarsGym(gym.Env):
             "then rerun training."
         )
 
-    def _make_env(self) -> Any | None:
+    def _make_env(
+        self, seed: int | None = None, options: dict[str, Any] | None = None
+    ) -> Any | None:
         self._fallback_reason = None
+        self._kaggle_seed_applied = False
         if importlib.util.find_spec("kaggle_environments") is None:
             self._fallback_reason = "kaggle_environments is not installed"
             if self.debug:
@@ -111,15 +116,101 @@ class OrbitWarsGym(gym.Env):
             return None
         from kaggle_environments import make
 
+        seeded_configuration = self._seeded_configuration(seed, options)
+        seeded_make_error: Exception | None = None
+        if seeded_configuration is not None:
+            try:
+                env = make(
+                    "orbit_wars",
+                    configuration=seeded_configuration,
+                    debug=self.debug,
+                )
+                if seed is not None:
+                    self._kaggle_seed_applied = True
+                return env
+            except Exception as exc:
+                seeded_make_error = exc
+                if self.debug:
+                    print(
+                        "Kaggle make('orbit_wars') did not accept seeded "
+                        f"configuration; retrying without it: {exc}"
+                    )
+
         try:
             return make("orbit_wars", debug=self.debug)
         except Exception as exc:
             self._fallback_reason = f"make('orbit_wars') failed: {exc}"
+            if seeded_make_error is not None:
+                self._fallback_reason += (
+                    f"; seeded configuration failed: {seeded_make_error}"
+                )
             if self.debug:
                 print(
                     f"Falling back to synthetic Orbit Wars smoke env: {self._fallback_reason}"
                 )
             return None
+
+    def _seeded_configuration(
+        self, seed: int | None, options: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        configuration: dict[str, Any] = {}
+        if isinstance(options, dict) and isinstance(options.get("configuration"), dict):
+            configuration.update(options["configuration"])
+        if seed is not None:
+            configuration["seed"] = int(seed)
+        return configuration or None
+
+    def _reset_kaggle_env(
+        self, seed: int | None, options: dict[str, Any] | None
+    ) -> bool:
+        if self._env is None:
+            return False
+
+        reset_options = dict(options or {})
+        if seed is not None:
+            reset_options.setdefault("seed", int(seed))
+
+        seeded_attempts: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+        if seed is not None:
+            seeded_attempts.extend(
+                [
+                    ((self.num_players,), {"seed": int(seed), "options": options}),
+                    (
+                        (),
+                        {
+                            "num_players": self.num_players,
+                            "seed": int(seed),
+                            "options": options,
+                        },
+                    ),
+                    ((self.num_players,), {"options": reset_options}),
+                    ((), {"num_players": self.num_players, "options": reset_options}),
+                    ((), {"seed": int(seed), "options": options}),
+                    ((), {"options": reset_options}),
+                ]
+            )
+        elif options is not None:
+            seeded_attempts.extend(
+                [
+                    ((self.num_players,), {"options": options}),
+                    ((), {"num_players": self.num_players, "options": options}),
+                    ((), {"options": options}),
+                ]
+            )
+
+        for args, kwargs in seeded_attempts:
+            try:
+                self._env.reset(*args, **kwargs)
+                return seed is not None
+            except Exception as exc:
+                if self.debug:
+                    print(f"Kaggle env.reset did not accept seeded/options call: {exc}")
+
+        try:
+            self._env.reset(self.num_players)
+        except TypeError:
+            self._env.reset()
+        return False
 
     def _player_obs(self) -> Any:
         if self._env is None:
@@ -193,21 +284,28 @@ class OrbitWarsGym(gym.Env):
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)
+        self._last_seed = int(seed) if seed is not None else None
         self._fallback_step = 0
         self.previous_obs = None
         self.episode_metrics = {
             "captures_per_episode": 0.0,
             "planets_lost_per_episode": 0.0,
         }
-        self._env = self._make_env()
-        if self._env is not None:
-            try:
-                self._env.reset(self.num_players)
-            except TypeError:
-                self._env.reset()
+        try:
+            self._env = self._make_env(seed=self._last_seed, options=options)
+        except TypeError:
+            self._env = self._make_env()
+        reset_seed_applied = self._reset_kaggle_env(self._last_seed, options)
+        self._kaggle_seed_applied = self._kaggle_seed_applied or reset_seed_applied
         self._last_obs = self._player_obs()
         self._refresh_candidates()
-        info: dict[str, Any] = {"fallback_env": self.using_fallback_env}
+        info: dict[str, Any] = {
+            "fallback_env": self.using_fallback_env,
+            "seed": self._last_seed,
+            "kaggle_seed_applied": (
+                self._kaggle_seed_applied and not self.using_fallback_env
+            ),
+        }
         if self._fallback_reason:
             info["fallback_reason"] = self._fallback_reason
         return (

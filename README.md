@@ -68,6 +68,30 @@ PowerShell helper:
 
 Evaluation reports wins, losses, draws when raw Kaggle rewards are available, plus average shaped reward and average final score when detectable.
 
+For repeated evaluations across distinct seeds, choose a base `--seed`; `evaluate.py` resets game `n` with `seed + n`, so `--games 10 --seed 1000` evaluates seeds `1000` through `1009`:
+
+```bash
+python -m orbit_wars_rl.evaluate \
+  --model-path models/orbit_wars_maskableppo_v1.zip \
+  --games 10 \
+  --opponent starter \
+  --seed 1000
+```
+
+To compare multiple Orbit Wars map presets or map-generation options, run separate evaluation batches with the same seed range and pass the map data through Gymnasium reset options when constructing a custom evaluation loop. `OrbitWarsGym.reset(seed=..., options=...)` forwards the seed through Kaggle construction/reset paths that accept it, preserves unsupported APIs, and returns `info["seed"]` plus `info["kaggle_seed_applied"]` so logs can confirm whether the real Kaggle environment received the seed:
+
+```python
+from orbit_wars_rl.envs.orbit_wars_gym import OrbitWarsGym
+from orbit_wars_rl.opponents.starter_bot import agent as starter_agent
+
+for map_name in ["map-a", "map-b"]:
+    for seed in range(1000, 1010):
+        env = OrbitWarsGym(opponent_agent=starter_agent)
+        obs, info = env.reset(seed=seed, options={"map": map_name})
+        print(map_name, seed, info["kaggle_seed_applied"])
+        env.close()
+```
+
 
 ## Diagnosing flat training runs
 
