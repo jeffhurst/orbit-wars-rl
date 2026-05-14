@@ -21,7 +21,7 @@ from orbit_wars_rl.features.observation_encoder import (
     encode_observation,
     observation_size,
 )
-from orbit_wars_rl.features.reward_shaping import compute_reward
+from orbit_wars_rl.features.reward_shaping import compute_reward_components
 from orbit_wars_rl.opponents.starter_bot import agent as starter_agent
 
 OpponentAgent = Callable[[Any, Any], list]
@@ -257,6 +257,7 @@ class OrbitWarsGym(gym.Env):
         previous_obs: Any | None,
         current_obs: Any,
         terminated: bool,
+        reward_components: dict[str, float] | None = None,
     ) -> dict[str, dict[str, float]]:
         ownership_changes = count_captures_and_losses(previous_obs, current_obs)
         self.episode_metrics["captures_per_episode"] += ownership_changes["captures"]
@@ -269,6 +270,8 @@ class OrbitWarsGym(gym.Env):
             **summarize_planets(current_obs),
             **ownership_changes,
         }
+        if reward_components is not None:
+            custom_metrics.update(reward_components)
         metrics = {"custom_metrics": custom_metrics}
         if terminated:
             metrics["episode_metrics"] = dict(self.episode_metrics)
@@ -328,12 +331,24 @@ class OrbitWarsGym(gym.Env):
             self._fallback_step += 1
             current_obs = self._fallback_obs()
             terminated = self._fallback_step >= 500
-            reward = compute_reward(previous_obs, current_obs, None, terminated)
+            reward_components = compute_reward_components(
+                previous_obs, current_obs, None, terminated
+            )
+            reward = reward_components["reward_total"]
+            final_score = (
+                reward_components["reward_terminal_raw"] if terminated else None
+            )
             info = {
                 "kaggle_action": rl_action,
                 "fallback_env": True,
+                "final_score": final_score,
                 **self._collect_metrics(
-                    action, action_candidates, previous_obs, current_obs, terminated
+                    action,
+                    action_candidates,
+                    previous_obs,
+                    current_obs,
+                    terminated,
+                    reward_components,
                 ),
             }
             self.previous_obs = current_obs
@@ -372,17 +387,22 @@ class OrbitWarsGym(gym.Env):
             getattr(agent_state, "status", "DONE") != "ACTIVE"
             for agent_state in self._env.state
         )
-        reward = compute_reward(previous_obs, current_obs, state, terminated)
+        reward_components = compute_reward_components(
+            previous_obs, current_obs, state, terminated
+        )
+        reward = reward_components["reward_total"]
+        raw_reward = getattr(self._env.state[self.player_id], "reward", None)
         info = {
             "kaggle_action": rl_action,
-            "raw_reward": getattr(self._env.state[self.player_id], "reward", None),
-            "final_score": (
-                getattr(self._env.state[self.player_id], "reward", None)
-                if terminated
-                else None
-            ),
+            "raw_reward": raw_reward,
+            "final_score": raw_reward if terminated else None,
             **self._collect_metrics(
-                action, action_candidates, previous_obs, current_obs, terminated
+                action,
+                action_candidates,
+                previous_obs,
+                current_obs,
+                terminated,
+                reward_components,
             ),
         }
         self.previous_obs = current_obs
