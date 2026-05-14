@@ -8,7 +8,7 @@ from pathlib import Path
 
 import gymnasium as gym
 from sb3_contrib import MaskablePPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecMonitor
 
 from orbit_wars_rl.envs.orbit_wars_gym import OrbitWarsGym
 from orbit_wars_rl.opponents.greedy_bot import agent as greedy_agent
@@ -91,7 +91,7 @@ def build_vec_env(args: argparse.Namespace) -> VecEnv:
         )
         for env_index in range(args.n_envs)
     ]
-    return DummyVecEnv(env_fns)
+    return VecMonitor(DummyVecEnv(env_fns))
 
 
 def validate_args(args: argparse.Namespace) -> None:
