@@ -218,6 +218,67 @@ def test_candidate_generator_uses_initial_planets_and_step_for_orbit_prediction(
     assert send_candidate["angle"] > 0.0
 
 
+class SingleScanInitialPlanets:
+    """Sequence that fails if candidate generation scans it more than once."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.accesses = 0
+
+    def __len__(self):
+        return len(self._rows)
+
+    def __getitem__(self, index):
+        self.accesses += 1
+        if self.accesses > len(self._rows) + 1:
+            raise AssertionError("initial_planets was scanned more than once")
+        if index >= len(self._rows):
+            raise IndexError(index)
+        return self._rows[index]
+
+
+def test_candidate_generator_indexes_initial_planets_once_for_moving_intercepts():
+    initial_planets = SingleScanInitialPlanets(
+        [
+            [0, 0, 20.0, 20.0, 2.0, 120, 2],
+            [1, -1, 80.0, 20.0, 2.0, 12, 3],
+            [2, -1, 20.0, 80.0, 2.0, 15, 3],
+            [3, 1, 80.0, 80.0, 2.0, 20, 3],
+            [4, -1, 50.0, 80.0, 2.0, 18, 3],
+        ]
+    )
+    obs = {
+        "player": 0,
+        "step": 8,
+        "angular_velocity": {"1": 0.03, "2": -0.025, "3": 0.02, "4": 0.015},
+        "initial_planets": initial_planets,
+        "planets": [
+            [0, 0, 20.0, 20.0, 2.0, 120, 2],
+            [1, -1, 80.0, 20.0, 2.0, 12, 3],
+            [2, -1, 20.0, 80.0, 2.0, 15, 3],
+            [3, 1, 80.0, 80.0, 2.0, 20, 3],
+            [4, -1, 50.0, 80.0, 2.0, 18, 3],
+        ],
+        "fleets": [],
+    }
+
+    candidates = generate_candidates(obs, max_candidates=12, config={"maxSpeed": 6.0})
+    send_candidates = [
+        candidate for candidate in candidates if candidate.get("type") == "send"
+    ]
+    target_one = next(
+        candidate
+        for candidate in send_candidates
+        if candidate["target_planet_id"] == 1
+    )
+    direct_angle = math.atan2(20.0 - 20.0, 80.0 - 20.0)
+
+    assert send_candidates
+    assert initial_planets.accesses <= len(initial_planets) + 1
+    assert target_one["intercept_angle_used"] is True
+    assert not math.isclose(target_one["angle"], direct_angle)
+
+
 def test_candidate_generator_filters_routes_through_sun():
     obs = {
         "player": 0,
