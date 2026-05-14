@@ -2,9 +2,105 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from math import isfinite
 from typing import Any
 
-from orbit_wars_rl.features.observation_encoder import get_fleets, get_planets, get_player
+REWARD_MIN = -1.0
+REWARD_MAX = 1.0
+DELTA_ADVANTAGE_MIN = -0.4
+DELTA_ADVANTAGE_MAX = 0.4
+CAPTURE_REWARD_MAX = 0.5
+LOSS_REWARD_MIN = -0.6
+TERMINAL_OUTCOME_SCALE = 0.5
+
+
+def _get(obj: Any, key: str, default: Any = None) -> Any:
+    if obj is None:
+        return default
+    if isinstance(obj, Mapping):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    return out if isfinite(out) else default
+
+
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _rows(obs: Any, key: str) -> list[Any]:
+    rows = _get(obs, key, [])
+    if rows is None:
+        return []
+    if hasattr(rows, "tolist"):
+        rows = rows.tolist()
+    if not isinstance(rows, list | tuple):
+        return []
+    return list(rows)
+
+
+def _row_value(row: Any, index: int, name: str, default: Any = 0) -> Any:
+    if isinstance(row, Mapping):
+        return row.get(name, default)
+    if hasattr(row, name):
+        return getattr(row, name)
+    try:
+        return row[index]
+    except (TypeError, IndexError, KeyError):
+        return default
+
+
+def get_player(obs: Any) -> int:
+    return _as_int(
+        _get(obs, "player", _get(obs, "player_id", _get(obs, "mark", 0))), 0
+    )
+
+
+def get_planets(obs: Any) -> list[dict[str, float | int]]:
+    planets: list[dict[str, float | int]] = []
+    for row in _rows(obs, "planets"):
+        planet = {
+            "id": _as_int(_row_value(row, 0, "id", len(planets))),
+            "owner": _as_int(_row_value(row, 1, "owner", -1), -1),
+            "ships": _as_float(_row_value(row, 5, "ships", 0.0)),
+            "production": _as_float(_row_value(row, 6, "production", 0.0)),
+        }
+        planets.append(planet)
+    return sorted(planets, key=lambda planet: int(planet["id"]))
+
+
+def get_fleets(obs: Any) -> list[dict[str, float | int]]:
+    fleets: list[dict[str, float | int]] = []
+    for row in _rows(obs, "fleets"):
+        fleet = {
+            "id": _as_int(_row_value(row, 0, "id", len(fleets))),
+            "owner": _as_int(_row_value(row, 1, "owner", -1), -1),
+            "ships": _as_float(_row_value(row, 6, "ships", 0.0)),
+        }
+        fleets.append(fleet)
+    return sorted(fleets, key=lambda fleet: int(fleet["id"]))
+
+
+def _clip(value: float, low: float, high: float) -> float:
+    return float(max(low, min(high, value)))
+
+
+def _sign(value: float) -> float:
+    if value > 0.0:
+        return 1.0
+    if value < 0.0:
+        return -1.0
+    return 0.0
 
 
 def _state_reward(env_state: Any, player: int) -> float:
@@ -102,13 +198,16 @@ def _ownership_changes(previous_obs: Any, current_obs: Any) -> tuple[float, floa
     return captures, losses
 
 
-def compute_reward(previous_obs, current_obs, env_state, done: bool) -> float:
+def compute_reward_components(
+    previous_obs, current_obs, env_state, done: bool
+) -> dict[str, float]:
     """
-    Reward philosophy:
-    - Reward changes in advantage.
-    - Also give small ongoing pressure for current map control.
-    - Explicitly reward captures and punish losses.
-    - Terminal reward still matters, but should not be the only useful signal.
+    Return bounded PPO reward components and raw terminal diagnostics.
+
+    The PPO reward is intentionally based on bounded one-step deltas and discrete
+    ownership events. The raw Kaggle terminal score is exposed as diagnostics only
+    in ``reward_terminal_raw``; a small signed terminal outcome bonus is used for
+    training instead of adding the raw score directly.
     """
 
     player = get_player(current_obs if current_obs is not None else previous_obs)
@@ -122,25 +221,40 @@ def compute_reward(previous_obs, current_obs, env_state, done: bool) -> float:
     delta_prod_adv = cur["prod_adv"] - prev["prod_adv"]
     delta_planet_adv = cur["planet_adv"] - prev["planet_adv"]
 
-    reward = 0.0
+    reward_delta_advantage = _clip(
+        (0.002 * delta_ship_adv)
+        + (0.04 * delta_prod_adv)
+        + (0.05 * delta_planet_adv),
+        DELTA_ADVANTAGE_MIN,
+        DELTA_ADVANTAGE_MAX,
+    )
+    reward_capture = _clip(0.30 * captures, 0.0, CAPTURE_REWARD_MAX)
+    reward_loss = _clip(-0.40 * losses, LOSS_REWARD_MIN, 0.0)
 
-    # Immediate advantage deltas.
-    reward += 0.002 * delta_ship_adv
-    reward += 0.04 * delta_prod_adv
-    reward += 0.05 * delta_planet_adv
+    reward_terminal_raw = _state_reward(env_state, player) if done else 0.0
+    reward_terminal = (
+        TERMINAL_OUTCOME_SCALE * _sign(reward_terminal_raw) if done else 0.0
+    )
 
-    # Explicit ownership events.
-    reward += 0.25 * captures
-    reward -= 0.35 * losses
+    reward_total = _clip(
+        reward_delta_advantage + reward_capture + reward_loss + reward_terminal,
+        REWARD_MIN,
+        REWARD_MAX,
+    )
 
-    # Ongoing strategic pressure.
-    # These are intentionally small, but they tell the agent:
-    # "being behind in economy every turn is bad."
-    reward += 0.001 * cur["ship_adv"]
-    reward += 0.005 * cur["prod_adv"]
-    reward += 0.01 * cur["planet_adv"]
+    return {
+        "reward_delta_advantage": reward_delta_advantage,
+        "reward_capture": reward_capture,
+        "reward_loss": reward_loss,
+        "reward_terminal": reward_terminal,
+        "reward_terminal_raw": float(reward_terminal_raw),
+        "reward_total": reward_total,
+    }
 
-    if done:
-        reward += _state_reward(env_state, player)
 
-    return float(reward)
+def compute_reward(previous_obs, current_obs, env_state, done: bool) -> float:
+    """Return the clipped PPO reward for a transition."""
+
+    return compute_reward_components(previous_obs, current_obs, env_state, done)[
+        "reward_total"
+    ]
