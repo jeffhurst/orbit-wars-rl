@@ -17,6 +17,7 @@ DEFAULT_MAX_FLEET_SPEED = 6.0
 DEFAULT_SUN_RADIUS = 5.0
 TRAJECTORY_SAMPLE_STEP = 0.5
 MAX_INTERCEPT_TIME = 500.0
+CANDIDATE_FALLBACK_MARGIN = 2
 _MISSING = object()
 
 
@@ -761,41 +762,91 @@ def generate_candidates(
         if int(p["owner"]) == player and float(p["ships"]) >= MIN_SOURCE_SHIPS
     ]
     owned.sort(key=lambda p: (-float(p["ships"]), int(p["id"])))
-    targets = sorted(planets, key=lambda p: _target_priority(p, player))
+    target_pools: dict[str, list[dict[str, Any]]] = {
+        purpose: [] for purpose in PURPOSE_ORDER
+    }
+    for target in sorted(planets, key=lambda p: _target_priority(p, player)):
+        target_pools[_target_purpose(target, player)].append(target)
+
+    purpose_quotas = _purpose_slot_counts(target_pools, send_slots)
+    fallback_margin = min(CANDIDATE_FALLBACK_MARGIN, send_slots)
+    build_limit = send_slots + fallback_margin
+    source_limit = min(
+        len(owned),
+        max(send_slots, math.ceil(build_limit / max(len(SHIP_FRACTIONS), 1))),
+    )
+    limited_sources = owned[:source_limit]
+
+    limited_target_pools: dict[str, list[dict[str, Any]]] = {}
+    for purpose in PURPOSE_ORDER:
+        pool = target_pools[purpose]
+        if not pool:
+            limited_target_pools[purpose] = []
+            continue
+        # Keep each purpose represented as a separate capped pool before the
+        # expensive candidate validation step. Purposes with no reserved quota
+        # still retain one fallback target so later selection can fill unused
+        # slots if higher-priority routes are invalid.
+        target_limit = max(1, purpose_quotas[purpose] + fallback_margin)
+        limited_target_pools[purpose] = pool[:target_limit]
 
     available_by_purpose: dict[str, list[dict[str, Any]]] = {
         purpose: [] for purpose in PURPOSE_ORDER
     }
     available_by_source: dict[int, list[dict[str, Any]]] = {}
-    for source in owned:
-        source_id = int(source["id"])
-        available = max(int(float(source["ships"])) - RESERVE_SHIPS, 0)
-        if available <= 0:
-            continue
+    valid_by_purpose = {purpose: 0 for purpose in PURPOSE_ORDER}
+    sources_with_valid: set[int] = set()
+    source_coverage_goal = min(send_slots, len(limited_sources))
 
-        for target in targets:
-            if int(target["id"]) == source_id:
+    def enough_valid_candidates() -> bool:
+        if sum(valid_by_purpose.values()) < build_limit:
+            return False
+        if len(sources_with_valid) < source_coverage_goal:
+            return False
+        return all(
+            valid_by_purpose[purpose] >= purpose_quotas[purpose]
+            for purpose in PURPOSE_ORDER
+        )
+
+    for purpose in PURPOSE_ORDER:
+        for source in limited_sources:
+            source_id = int(source["id"])
+            available = max(int(float(source["ships"])) - RESERVE_SHIPS, 0)
+            if available <= 0:
                 continue
-            for fraction in SHIP_FRACTIONS:
-                candidate = _build_send_candidate(
-                    source,
-                    target,
-                    fraction,
-                    available,
-                    player,
-                    obs,
-                    config,
-                    planets,
-                    initial_planets_by_id,
-                    planet_motion_by_id,
-                )
-                if candidate is None:
-                    continue
-                purpose = str(candidate["purpose"])
-                available_by_purpose[purpose].append(candidate)
-                available_by_source.setdefault(source_id, []).append(candidate)
 
-    purpose_quotas = _purpose_slot_counts(available_by_purpose, send_slots)
+            for target in limited_target_pools[purpose]:
+                if int(target["id"]) == source_id:
+                    continue
+                for fraction in SHIP_FRACTIONS:
+                    candidate = _build_send_candidate(
+                        source,
+                        target,
+                        fraction,
+                        available,
+                        player,
+                        obs,
+                        config,
+                        planets,
+                        initial_planets_by_id,
+                        planet_motion_by_id,
+                    )
+                    if candidate is None:
+                        continue
+                    candidate_purpose = str(candidate["purpose"])
+                    available_by_purpose[candidate_purpose].append(candidate)
+                    available_by_source.setdefault(source_id, []).append(candidate)
+                    valid_by_purpose[candidate_purpose] += 1
+                    sources_with_valid.add(source_id)
+                    if enough_valid_candidates():
+                        break
+                if enough_valid_candidates():
+                    break
+            if enough_valid_candidates():
+                break
+        if enough_valid_candidates():
+            break
+
     selected: list[dict[str, Any]] = []
     selected_keys: set[tuple[int, int, float]] = set()
     purpose_counts = {purpose: 0 for purpose in PURPOSE_ORDER}
@@ -844,16 +895,7 @@ def generate_candidates(
             return candidate
         return fallback
 
-    for purpose in PURPOSE_ORDER:
-        if purpose_quotas[purpose] <= 0:
-            continue
-        candidate = first_unused(
-            available_by_purpose[purpose], prefer_uncovered_source=True
-        )
-        if candidate is not None:
-            add_candidate(candidate)
-
-    for source in owned:
+    for source in limited_sources:
         if len(selected) >= send_slots:
             break
         source_id = int(source["id"])
@@ -862,6 +904,15 @@ def generate_candidates(
         candidate = first_unused(
             available_by_source.get(source_id, []), respect_purpose_quota=True
         ) or first_unused(available_by_source.get(source_id, []))
+        if candidate is not None:
+            add_candidate(candidate)
+
+    for purpose in PURPOSE_ORDER:
+        if purpose_quotas[purpose] <= 0:
+            continue
+        candidate = first_unused(
+            available_by_purpose[purpose], prefer_uncovered_source=True
+        )
         if candidate is not None:
             add_candidate(candidate)
 
